@@ -12,6 +12,7 @@ Data tersimpan di **Firebase** (akun Google kamu): login via **Google Sign-In**,
 - **CRUD barang** — nama, deskripsi, kategori, lokasi, qty + satuan, nilai satuan (Rp), kondisi, tanggal beli, catatan
 - **Foto barang** — multi-foto (maks 10), otomatis dikompres ke JPG, pilih foto utama, galeri + lightbox
 - **Loading spinner** — spinner global + spinner di tombol tiap aksi yang nunggu respon server (simpan, hapus, import, backup, login)
+- **Riwayat stok masuk/keluar** — tombol `+`/`−` qty cepat di daftar barang & halaman detail, penyesuaian manual dengan alasan, serta log lengkap per item (kapan, dari berapa ke berapa, alasannya)
 - **Timestamp otomatis** — kapan barang dibuat & terakhir diubah
 - **Dashboard** — total jenis barang, total qty, total nilai (Rp), rekap nilai per lokasi & per kategori, barang terbaru & termahal
 - **Pencarian & filter** — cari nama/deskripsi/catatan, filter kategori & lokasi, sortir (terbaru, nama, nilai, qty)
@@ -106,3 +107,15 @@ users/{uid}/
   1. **Google Sign-In** (hanya user login yang bisa pakai app)
   2. **Security Rules** di atas (user hanya bisa akses `users/{uid}/...` miliknya)
 - Jangan pernah menaruh service account key / private key di repo ini
+
+## 🗺️ Roadmap Fitur Berikutnya
+
+Rencana pengembangan ke depan (bisa berubah sesuai kebutuhan):
+
+- [ ] **Lokasi berjenjang + QR Code** — struktur lokasi bertingkat (Rumah → Kamar → Lemari → Rak → Kotak) + QR code per item untuk menemukan barang fisik
+- [ ] **Pengingat garansi & perawatan** — tanggal garansi berakhir & jadwal servis, dengan panel "Perlu Perhatian" di dashboard
+- [ ] **Grafik statistik** — chart nilai per kategori & lokasi, tren nilai inventaris per bulan
+- [ ] **Tracker peminjaman** — catat barang dipinjam siapa, kapan harus dikembalikan
+- [ ] **PWA** — pasang aplikasi ke HP langsung dari browser (installable)
+- [ ] **Export PDF** — laporan inventaris siap cetak
+- [ ] **Tag fleksibel** — label tambahan di luar kategori (mis. "favorit", "penting", "hibahkan")

@@ -181,6 +181,38 @@ export async function deleteItem(id) {
   await withTimeout(deleteDoc(doc(db, 'users', requireUser().uid, 'items', id)));
 }
 
+// ---------------- riwayat stok (stock movements) ----------------
+/** Catat satu pergerakan stok (tanpa mengubah qty item) */
+export async function logMovement({ itemId, itemName, type = 'set', delta = 0, qtyBefore = 0, qtyAfter = 0, reason = '', createdAt = null }) {
+  return withTimeout(addDoc(col('stock_movements'), {
+    itemId: itemId || '',
+    itemName: itemName || '',
+    type,
+    delta: Number(delta),
+    qtyBefore: Number(qtyBefore),
+    qtyAfter: Number(qtyAfter),
+    reason: String(reason || ''),
+    createdAt: createdAt || serverTimestamp(),
+  }));
+}
+
+/** Ubah qty item + catat riwayatnya secara otomatis. newQty di-clamp minimal 0. */
+export async function adjustQty(item, newQty, { type = 'set', reason = '' } = {}) {
+  const before = Number(item.qty ?? 0);
+  const after = Math.max(0, Number(newQty ?? 0));
+  await withTimeout(updateDoc(doc(db, 'users', requireUser().uid, 'items', item.id), {
+    qty: after,
+    updatedAt: serverTimestamp(),
+  }));
+  await logMovement({
+    itemId: item.id, itemName: item.name,
+    type, delta: after - before,
+    qtyBefore: before, qtyAfter: after,
+    reason,
+  });
+  return after;
+}
+
 // ---------------- foto (base64 di Firestore) ----------------
 /** Simpan array dataURL sebagai dokumen foto → return array photoId */
 export async function createPhotos(itemId, dataUrls) {
@@ -277,7 +309,8 @@ export async function importBackup(json) {
   const catById = new Map((json.categories || []).map((c) => [c.id, c.name]));
   const locById = new Map((json.locations || []).map((l) => [l.id, l.name]));
   const cats = new Set(), locs = new Set();
-  let itemsImported = 0, photosImported = 0;
+  let itemsImported = 0, photosImported = 0, movesImported = 0;
+  const idByName = new Map(); // itemName -> itemId baru (buat relink riwayat stok)
 
   for (const raw of json.items || []) {
     const category = raw.category || catById.get(raw.category_id) || '';
@@ -285,8 +318,9 @@ export async function importBackup(json) {
     if (category) cats.add(category);
     if (location) locs.add(location);
 
+    const itemName = String(raw.name || '').trim();
     const itemId = await createItem({
-      name: String(raw.name || '').trim(),
+      name: itemName,
       description: raw.description || '',
       category,
       location,
@@ -298,6 +332,7 @@ export async function importBackup(json) {
       notes: raw.notes || '',
     });
     itemsImported += 1;
+    if (itemName && !idByName.has(itemName)) idByName.set(itemName, itemId);
 
     const dataUrls = (raw.photos || [])
       .filter((p) => p.data)
@@ -313,7 +348,25 @@ export async function importBackup(json) {
   // pastikan kategori/lokasi unik ada di daftar kelola
   await ensureNames('categories', cats);
   await ensureNames('locations', locs);
-  return { itemsImported, photosImported };
+
+  // riwayat stok — relink ke item baru berdasarkan nama
+  for (const m of json.stock_movements || []) {
+    try {
+      await logMovement({
+        itemId: idByName.get(m.itemName) || '',
+        itemName: m.itemName || '',
+        type: m.type || 'set',
+        delta: Number(m.delta ?? 0),
+        qtyBefore: Number(m.qtyBefore ?? 0),
+        qtyAfter: Number(m.qtyAfter ?? 0),
+        reason: m.reason || '',
+        createdAt: m.created_at || m.createdAt || null,
+      });
+      movesImported += 1;
+    } catch { /* satu riwayat gagal tidak menggagalkan import */ }
+  }
+
+  return { itemsImported, photosImported, movesImported };
 }
 
 async function ensureNames(kind, names) {

@@ -380,8 +380,8 @@ select.input {
 .item-meta { display: flex; flex-wrap: wrap; gap: 6px; overflow: hidden; }
 .item-foot {
   margin-top: auto; display: flex; justify-content: space-between;
-  align-items: baseline; gap: 8px; padding-top: 8px;
-  border-top: 1px dashed var(--line);
+  align-items: center; gap: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--line); flex-wrap: wrap;
 }
 .item-value { font-weight: 800; font-size: .92rem; color: var(--primary-strong); font-variant-numeric: tabular-nums; }
 .item-qty { font-size: .78rem; color: var(--text-soft); font-weight: 650; white-space: nowrap; }
@@ -421,6 +421,56 @@ select.input {
   background: var(--grad-accent);
   box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+
+/* ---------- Qty stepper & riwayat stok ---------- */
+.qty-stepper { display: flex; align-items: center; gap: 5px; }
+.qty-btn {
+  width: 27px; height: 27px; border-radius: 9px; border: 1px solid var(--line-strong);
+  background: var(--card-2); color: var(--text); font-size: 1.02rem; font-weight: 800;
+  line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0;
+  transition: background .15s, transform .12s, border-color .15s, color .15s;
+  -webkit-tap-highlight-color: transparent; user-select: none;
+}
+.qty-btn:hover { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-strong); }
+.qty-btn:active { transform: scale(.88); }
+.qty-btn:disabled { opacity: .45; cursor: not-allowed; }
+.qty-btn-lg { width: 42px; height: 42px; border-radius: 13px; font-size: 1.35rem; }
+.qty-label { min-width: 62px; text-align: center; }
+
+.qty-panel {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: var(--radius);
+  background: var(--card-2); border: 1px solid var(--line);
+}
+.qty-display {
+  display: flex; align-items: baseline; gap: 5px;
+  min-width: 70px; justify-content: center;
+}
+.qty-display b { font-size: 1.7rem; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.qty-display span { font-size: .82rem; color: var(--text-soft); font-weight: 650; }
+
+.move-list { display: flex; flex-direction: column; }
+.move-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 2px; border-bottom: 1px solid var(--line);
+}
+.move-row:last-child { border-bottom: 0; }
+.move-info { flex: 1; min-width: 0; font-size: .85rem; color: var(--text-soft); }
+.move-info b { color: var(--text); font-variant-numeric: tabular-nums; }
+.move-delta {
+  font-weight: 800; font-size: .92rem; font-variant-numeric: tabular-nums;
+  padding: 3px 10px; border-radius: 999px; flex-shrink: 0;
+}
+.move-delta.up { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.move-delta.down { background: var(--danger-soft); color: var(--danger); }
+.move-icon {
+  border-radius: 12px; font-size: 1.1rem; font-weight: 800;
+}
+.move-icon.in { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.move-icon.out { background: var(--danger-soft); color: var(--danger); }
+.move-icon.set { background: var(--accent-soft); color: var(--accent); }
+.mini-row.no-click { cursor: default; }
+.mini-row.no-click:hover { background: transparent; transform: none; }
 
 /* ---------- Mini lists ---------- */
 .mini-list { display: flex; flex-direction: column; }
