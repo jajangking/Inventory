@@ -264,13 +264,13 @@ function navigate(hash) { location.hash = hash; }
 
 function setTopbar(visible) {
   $('#topbar').hidden = !visible;
+  $('#bottomnav').hidden = !visible;
   if (visible && state.user) {
     $('#user-chip').textContent = state.user.displayName || state.user.email || 'Akun';
   }
-  $$('#mainnav a').forEach((a) => a.classList.remove('active'));
+  $$('[data-nav]').forEach((a) => a.classList.remove('active'));
   const key = (location.hash || '').split('/')[1];
-  const nav = $(`#mainnav a[data-nav="${key}"]`);
-  if (nav) nav.classList.add('active');
+  $$(`[data-nav="${key}"]`).forEach((a) => a.classList.add('active'));
 }
 
 async function router() {
@@ -326,7 +326,7 @@ function viewSignIn() {
   <div class="auth-screen">
     <div class="card auth-card">
       <div class="auth-brand">
-        <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2" fill="currentColor" opacity=".9"/><path d="M3 9l9-5 9 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 13h6" stroke="var(--bg-card)" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2" fill="currentColor" opacity=".9"/><path d="M3 9l9-5 9 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 13h6" stroke="var(--card)" stroke-width="2" stroke-linecap="round"/></svg>
         <span>Inventory</span>
       </div>
       <h2 style="margin:0 0 4px;font-size:20px">Catatan barang pribadi</h2>
