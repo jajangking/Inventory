@@ -9,6 +9,7 @@ import {
   watchAuth, googleSignIn, logout as fbLogout, friendlyError, checkRedirectResult,
   fetchAll, createItem, updateItem, deleteItem,
   createPhotos, getPhotos, deletePhotos,
+  adjustQty, logMovement,
   addCategory, addLocation, renameCategory, renameLocation, deleteCategory, deleteLocation,
   importBackup, loadSampleData,
 } from './firebase.js';
@@ -39,6 +40,21 @@ function fmtDateTime(iso) {
   return Number.isNaN(d.getTime()) ? '—'
     : d.toLocaleString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+function relTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'baru saja';
+  if (m < 60) return `${m} menit lalu`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} jam lalu`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d} hari lalu`;
+  return fmtDate(iso);
+}
+
+const MOVE_LABELS = { in: 'Masuk', out: 'Keluar', set: 'Penyesuaian' };
+const moveLabel = (m) => MOVE_LABELS[m.type] || 'Penyesuaian';
 
 const CONDITION_LABELS = {
   baru: 'Baru', bekas_baik: 'Bekas (baik)', rusak_ringan: 'Rusak ringan', rusak: 'Rusak',
@@ -180,6 +196,45 @@ function lightbox(src) {
   $('.modal-overlay').addEventListener('click', closeModal);
 }
 
+/** Modal penyesuaian stok manual — mengembalikan { type, amount, reason } atau null */
+function adjustModal(item) {
+  return new Promise((resolve) => {
+    openModal(`
+      <h3>Penyesuaian stok</h3>
+      <p>Qty saat ini: <b>${item.qty} ${esc(item.unit)}</b></p>
+      <div class="field"><label>Jenis pergerakan</label>
+        <select class="input" id="m-type">
+          <option value="in">Masuk (tambah)</option>
+          <option value="out">Keluar (kurangi)</option>
+          <option value="set">Set jumlah baru</option>
+        </select></div>
+      <div class="field"><label id="m-amt-label">Jumlah</label>
+        <input class="input" id="m-amount" type="number" min="0" step="any" value="1" /></div>
+      <div class="field"><label>Alasan (opsional)</label>
+        <input class="input" id="m-reason" maxlength="140" placeholder="mis. dipinjam, beli baru, rusak..." /></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="m-cancel">Batal</button>
+        <button class="btn btn-primary" id="m-ok">Simpan</button>
+      </div>`);
+    const typeSel = $('#m-type');
+    const amount = $('#m-amount');
+    typeSel.addEventListener('change', () => {
+      $('#m-amt-label').textContent = typeSel.value === 'set' ? 'Jumlah baru' : 'Jumlah';
+      amount.value = typeSel.value === 'set' ? String(item.qty) : '1';
+      amount.focus();
+    });
+    const done = (v) => { closeModal(); resolve(v); };
+    $('#m-cancel').onclick = () => done(null);
+    $('#m-ok').onclick = () => done({
+      type: typeSel.value,
+      amount: Math.max(0, Number(amount.value) || 0),
+      reason: $('#m-reason').value.trim(),
+    });
+    amount.focus();
+    amount.select();
+  });
+}
+
 function downloadFile(content, filename, type) {
   const blob = new Blob([content], { type });
   const a = document.createElement('a');
@@ -197,6 +252,7 @@ const state = {
   items: [],
   categories: [],
   locations: [],
+  movements: [],
   photoCache: new Map(), // photoId -> dataURL | null
 };
 
@@ -205,6 +261,7 @@ async function refreshMeta() {
   state.items = data.items;
   state.categories = data.categories;
   state.locations = data.locations;
+  state.movements = data.movements;
 }
 
 /** Ambil data foto (on-demand + cache) — diam, tanpa overlay supaya tampilan tidak terganggu */
@@ -377,6 +434,9 @@ function computeStats() {
     byLocation: group('location', 'Tanpa Lokasi'),
     recent: [...items].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)).slice(0, 6),
     topValue: [...items].sort((a, b) => b.total_value - a.total_value).slice(0, 5),
+    recentMoves: [...state.movements]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .slice(0, 8),
   };
 }
 
@@ -465,7 +525,7 @@ async function viewDashboard() {
       </div>
     </div>
 
-    <div class="grid grid-2 section-gap">
+    <div class="grid grid-3 section-gap">
       <div class="card card-pad">
         <h3 class="card-title">Barang Terbaru Diubah</h3>
         <div class="mini-list">${s.recent.length ? miniItems(s.recent) : '<p class="page-sub">Belum ada barang.</p>'}</div>
@@ -473,6 +533,18 @@ async function viewDashboard() {
       <div class="card card-pad">
         <h3 class="card-title">Nilai Tertinggi</h3>
         <div class="mini-list">${s.topValue.length ? miniItems(s.topValue) : '<p class="page-sub">Belum ada barang.</p>'}</div>
+      </div>
+      <div class="card card-pad">
+        <h3 class="card-title">Aktivitas Stok Terbaru</h3>
+        <div class="mini-list">${s.recentMoves.length ? s.recentMoves.map((m) => `
+          <div class="mini-row${m.itemId ? '' : ' no-click'}" ${m.itemId ? `data-id="${m.itemId}"` : ''}>
+            <div class="mini-thumb move-icon ${m.type}">${m.type === 'in' ? '↗' : m.type === 'out' ? '↘' : '⇄'}</div>
+            <div class="mini-info">
+              <div class="mini-name">${esc(m.itemName || 'Barang')}</div>
+              <div class="mini-sub">${moveLabel(m)}${m.reason ? ` · ${esc(m.reason)}` : ''} · ${relTime(m.createdAt)}</div>
+            </div>
+            <span class="move-delta ${m.delta >= 0 ? 'up' : 'down'}">${m.delta >= 0 ? '+' : ''}${m.delta}</span>
+          </div>`).join('') : '<p class="page-sub">Belum ada aktivitas stok. Pakai tombol +/− di daftar barang untuk mencatat.</p>'}</div>
       </div>
     </div>`;
 
@@ -489,7 +561,9 @@ async function viewDashboard() {
     } catch (e) { toast(friendlyError(e), 'error'); }
   });
 
-  $$('.mini-row').forEach((row) => row.addEventListener('click', () => navigate(`#/items/${row.dataset.id}`)));
+  $$('.mini-row').forEach((row) => row.addEventListener('click', () => {
+    if (row.dataset.id) navigate(`#/items/${row.dataset.id}`);
+  }));
 
   // isi foto mini secara async setelah tampilan ter-render
   miniAll.forEach((r) => {
@@ -544,7 +618,11 @@ async function viewItems() {
         </div>
         <div class="item-foot">
           <span class="item-value">${fmtIDR(it.total_value)}</span>
-          <span class="item-qty">Qty ${it.qty} ${esc(it.unit)}</span>
+          <div class="qty-stepper">
+            <button type="button" class="qty-btn" data-qty="dec" data-id="${it.id}" aria-label="Kurangi qty">−</button>
+            <span class="item-qty qty-label" data-qty-for="${it.id}">Qty ${it.qty} ${esc(it.unit)}</span>
+            <button type="button" class="qty-btn" data-qty="inc" data-id="${it.id}" aria-label="Tambah qty">+</button>
+          </div>
         </div>
       </div>
     </div>`;
@@ -618,6 +696,34 @@ async function viewItems() {
   $('#pg-next')?.addEventListener('click', () => { itemsState.page += 1; viewItems(); });
   $$('.item-card').forEach((c) => c.addEventListener('click', () => navigate(`#/items/${c.dataset.id}`)));
 
+  // tombol +/− qty cepat di kartu (tanpa membuka detail)
+  $$('[data-qty]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const it = state.items.find((x) => x.id === b.dataset.id);
+    if (!it || it._busy) return;
+    const inc = b.dataset.qty === 'inc';
+    if (!inc && it.qty <= 0) return toast('Qty sudah 0.', 'error');
+    it._busy = true;
+    const before = Number(it.qty);
+    const after = before + (inc ? 1 : -1);
+    try {
+      await withLoading('Memperbarui qty...', () =>
+        adjustQty(it, after, { type: inc ? 'in' : 'out', reason: 'Penyesuaian cepat' }));
+      it.qty = after;
+      it.total_value = after * Number(it.value);
+      const label = $(`[data-qty-for="${it.id}"]`);
+      if (label) label.textContent = `Qty ${after} ${it.unit}`;
+      const valEl = b.closest('.item-card')?.querySelector('.item-value');
+      if (valEl) valEl.textContent = fmtIDR(it.total_value);
+      toast(`${it.name}: qty ${before} → ${after} (${inc ? 'Masuk +1' : 'Keluar −1'})`);
+      refreshMeta().catch(() => {}); // sinkronkan data di latar belakang
+    } catch (err) {
+      toast(friendlyError(err), 'error');
+    } finally {
+      it._busy = false;
+    }
+  }));
+
   // pertahankan fokus di kolom search setelah re-render
   if (itemsState.focusSearch) {
     itemsState.focusSearch = false;
@@ -646,6 +752,19 @@ async function viewItemDetail(id) {
   const srcs = await loadPhotos(it.photoRefs);
   const photos = srcs.filter(Boolean);
   const primary = srcs[it.primaryPhotoIndex] || photos[0] || null;
+
+  const moves = [...state.movements]
+    .filter((m) => m.itemId === it.id)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const moveHtml = moves.length ? moves.map((m) => `
+    <div class="move-row">
+      <span class="chip ${m.type === 'in' ? 'chip-ok' : m.type === 'out' ? 'chip-danger' : 'chip-accent'}">${moveLabel(m)}</span>
+      <div class="move-info">
+        <b>${m.qtyBefore} → ${m.qtyAfter}</b>${m.reason ? ` · ${esc(m.reason)}` : ''}
+        <div class="mini-sub">${fmtDateTime(m.createdAt)}</div>
+      </div>
+      <span class="move-delta ${m.delta >= 0 ? 'up' : 'down'}">${m.delta >= 0 ? '+' : ''}${m.delta}</span>
+    </div>`).join('') : '<p class="page-sub">Belum ada pergerakan stok untuk barang ini. Pakai tombol +/− atau "Penyesuaian Manual" untuk mencatat.</p>';
 
   $('#app').innerHTML = `
     <div class="page-head">
@@ -680,6 +799,13 @@ async function viewItemDetail(id) {
       <div>
         <div class="card card-pad">
           <h3 class="card-title">Detail</h3>
+          <div class="qty-panel">
+            <button class="qty-btn qty-btn-lg" id="q-dec" aria-label="Kurangi qty">−</button>
+            <div class="qty-display"><b id="q-val">${it.qty}</b><span>${esc(it.unit)}</span></div>
+            <button class="qty-btn qty-btn-lg" id="q-inc" aria-label="Tambah qty">+</button>
+            <span class="chip chip-primary" id="q-total">${fmtIDR(it.total_value)}</span>
+          </div>
+          <hr class="divider" />
           <dl class="kv">
             <dt>Qty</dt><dd>${it.qty} ${esc(it.unit)}</dd>
             <dt>Nilai satuan</dt><dd>${fmtIDR(it.value)}</dd>
@@ -692,6 +818,12 @@ async function viewItemDetail(id) {
             <dt>Diubah</dt><dd>${fmtDateTime(it.updatedAt)}</dd>
           </dl>
         </div>
+
+        <div class="card card-pad section-gap">
+          <h3 class="card-title">Riwayat Stok 📜</h3>
+          <div class="move-list">${moveHtml}</div>
+          <button class="btn btn-outline btn-sm" id="q-adjust" style="margin-top:14px">＋ Penyesuaian Manual</button>
+        </div>
       </div>
     </div>`;
 
@@ -701,6 +833,39 @@ async function viewItemDetail(id) {
     $$('.g-thumb').forEach((x) => x.classList.remove('selected'));
     t.classList.add('selected');
   }));
+
+  // ---- kontrol qty cepat + penyesuaian manual ----
+  async function quickAdjust(delta) {
+    if (delta < 0 && it.qty <= 0) return toast('Qty sudah 0.', 'error');
+    const before = Number(it.qty);
+    const after = before + delta;
+    try {
+      await withLoading('Memperbarui qty...', () =>
+        adjustQty(it, after, { type: delta > 0 ? 'in' : 'out', reason: 'Penyesuaian cepat' }));
+      await refreshMeta();
+      toast(`Qty ${before} → ${after} (${delta > 0 ? 'Masuk +1' : 'Keluar −1'})`);
+      viewItemDetail(id);
+    } catch (e) { toast(friendlyError(e), 'error'); }
+  }
+  $('#q-dec')?.addEventListener('click', () => quickAdjust(-1));
+  $('#q-inc')?.addEventListener('click', () => quickAdjust(1));
+
+  $('#q-adjust')?.addEventListener('click', async () => {
+    const res = await adjustModal(it);
+    if (!res) return;
+    const newQty = res.type === 'set' ? res.amount
+      : res.type === 'in' ? Number(it.qty) + res.amount
+      : Number(it.qty) - res.amount;
+    if (newQty < 0) return toast('Qty tidak bisa kurang dari 0.', 'error');
+    if (newQty === Number(it.qty)) return toast('Qty tidak berubah.');
+    try {
+      await withLoading('Menyimpan penyesuaian...', () =>
+        adjustQty(it, newQty, { type: res.type, reason: res.reason }));
+      await refreshMeta();
+      toast(`Qty ${it.qty} → ${newQty} (${moveLabel({ type: res.type })})`);
+      viewItemDetail(id);
+    } catch (e) { toast(friendlyError(e), 'error'); }
+  });
 
   $('#del-btn').addEventListener('click', async () => {
     if (!await confirmModal({ title: 'Hapus barang?', message: `"${it.name}" akan dihapus permanen beserta fotonya.` })) return;
@@ -920,6 +1085,17 @@ async function viewItemForm(id) {
         const itemId = editing ? id : await createItem(payload);
         savedId = itemId;
         if (editing) await updateItem(id, payload);
+
+        // qty berubah lewat form → catat juga di riwayat stok
+        if (editing && Number(payload.qty) !== Number(it.qty)) {
+          await logMovement({
+            itemId: id, itemName: payload.name,
+            type: 'set',
+            delta: Number(payload.qty) - Number(it.qty),
+            qtyBefore: Number(it.qty), qtyAfter: Number(payload.qty),
+            reason: 'Edit manual dari form',
+          });
+        }
 
         // ---- sinkron foto: simpan baru, hapus yang dihapus, set foto utama ----
         const oldRefs = it?.photoRefs || [];
@@ -1158,6 +1334,13 @@ async function viewSettings() {
         categories: state.categories.map((c) => ({ name: c.name })),
         locations: state.locations.map((l) => ({ name: l.name, description: l.description || '' })),
         items,
+        stock_movements: [...state.movements]
+          .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+          .map((m) => ({
+            itemName: m.itemName, type: m.type, delta: m.delta,
+            qtyBefore: m.qtyBefore, qtyAfter: m.qtyAfter,
+            reason: m.reason, created_at: m.createdAt,
+          })),
       };
       downloadFile(JSON.stringify(backup, null, 2),
         `inventory-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
@@ -1183,7 +1366,7 @@ async function viewSettings() {
       const json = JSON.parse(await file.text());
       const r = await withLoading(`Mengimport ${file.name}...`, () => importBackup(json));
       await refreshMeta();
-      toast(`Import berhasil: ${r.itemsImported} item, ${r.photosImported} foto.`);
+      toast(`Import berhasil: ${r.itemsImported} item, ${r.photosImported} foto, ${r.movesImported || 0} riwayat stok.`);
       viewSettings();
     } catch (err) {
       toast(err instanceof SyntaxError ? 'File backup tidak valid.' : friendlyError(err), 'error');
