@@ -13,6 +13,8 @@ Data tersimpan di **Firebase** (akun Google kamu): login via **Google Sign-In**,
 - **Foto barang** — multi-foto (maks 10), otomatis dikompres ke JPG, pilih foto utama, galeri + lightbox
 - **Loading spinner** — spinner global + spinner di tombol tiap aksi yang nunggu respon server (simpan, hapus, import, backup, login)
 - **Riwayat stok masuk/keluar** — tombol `+`/`−` qty cepat di daftar barang & halaman detail, penyesuaian manual dengan alasan, serta log lengkap per item (kapan, dari berapa ke berapa, alasannya)
+- **Tracker peminjaman** — pinjamkan barang ke teman/keluarga: catat siapa, kapan, dan tenggat kembali — dengan pengingat "terlambat/H-n" di dashboard
+- **Grafik statistik** — tren nilai inventaris 12 bulan, nilai per kategori & lokasi, komposisi kondisi barang (tanpa library eksternal)
 - **Timestamp otomatis** — kapan barang dibuat & terakhir diubah
 - **Dashboard** — total jenis barang, total qty, total nilai (Rp), rekap nilai per lokasi & per kategori, barang terbaru & termahal
 - **Pencarian & filter** — cari nama/deskripsi/catatan, filter kategori & lokasi, sortir (terbaru, nama, nilai, qty)
@@ -114,8 +116,8 @@ Rencana pengembangan ke depan (bisa berubah sesuai kebutuhan):
 
 - [ ] **Lokasi berjenjang + QR Code** — struktur lokasi bertingkat (Rumah → Kamar → Lemari → Rak → Kotak) + QR code per item untuk menemukan barang fisik
 - [ ] **Pengingat garansi & perawatan** — tanggal garansi berakhir & jadwal servis, dengan panel "Perlu Perhatian" di dashboard
-- [ ] **Grafik statistik** — chart nilai per kategori & lokasi, tren nilai inventaris per bulan
-- [ ] **Tracker peminjaman** — catat barang dipinjam siapa, kapan harus dikembalikan
+- [x] **Grafik statistik** — chart nilai per kategori & lokasi, tren nilai inventaris per bulan
+- [x] **Tracker peminjaman** — catat barang dipinjam siapa, kapan harus dikembalikan
 - [ ] **PWA** — pasang aplikasi ke HP langsung dari browser (installable)
 - [ ] **Export PDF** — laporan inventaris siap cetak
 - [ ] **Tag fleksibel** — label tambahan di luar kategori (mis. "favorit", "penting", "hibahkan")
