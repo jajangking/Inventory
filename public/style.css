@@ -47,6 +47,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Atribut hidden WAJIB menang dari aturan display di bawah (topbar, loading overlay, dll) */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;

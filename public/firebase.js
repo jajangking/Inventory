@@ -163,22 +163,22 @@ export async function createItem(data) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  const r = await addDoc(col('items'), payload);
+  const r = await withTimeout(addDoc(col('items'), payload));
   return r.id;
 }
 
 export async function updateItem(id, data) {
-  await updateDoc(doc(db, 'users', requireUser().uid, 'items', id), {
+  await withTimeout(updateDoc(doc(db, 'users', requireUser().uid, 'items', id), {
     ...data,
     updatedAt: serverTimestamp(),
-  });
+  }));
 }
 
 export async function deleteItem(id) {
-  const snap = await getDoc(doc(db, 'users', requireUser().uid, 'items', id));
+  const snap = await withTimeout(getDoc(doc(db, 'users', requireUser().uid, 'items', id)));
   const refs = snap.data()?.photoRefs || [];
   if (refs.length) await deletePhotos(refs);
-  await deleteDoc(doc(db, 'users', requireUser().uid, 'items', id));
+  await withTimeout(deleteDoc(doc(db, 'users', requireUser().uid, 'items', id)));
 }
 
 // ---------------- foto (base64 di Firestore) ----------------
@@ -186,11 +186,11 @@ export async function deleteItem(id) {
 export async function createPhotos(itemId, dataUrls) {
   const ids = [];
   for (const data of dataUrls) {
-    const r = await addDoc(col('photos'), {
+    const r = await withTimeout(addDoc(col('photos'), {
       itemId,
       data,
       createdAt: serverTimestamp(),
-    });
+    }));
     ids.push(r.id);
   }
   return ids;
@@ -213,16 +213,16 @@ export async function getPhotos(photoIds) {
 /** Hapus dokumen foto */
 export async function deletePhotos(photoIds) {
   await Promise.all((photoIds || []).map(async (id) => {
-    try { await deleteDoc(doc(db, 'users', requireUser().uid, 'photos', id)); } catch { /* abaikan */ }
+    try { await withTimeout(deleteDoc(doc(db, 'users', requireUser().uid, 'photos', id))); } catch { /* abaikan */ }
   }));
 }
 
 // ---------------- categories & locations ----------------
 export async function addCategory(name) {
-  return addDoc(col('categories'), { name, createdAt: serverTimestamp() });
+  return withTimeout(addDoc(col('categories'), { name, createdAt: serverTimestamp() }));
 }
 export async function addLocation(name, description = '') {
-  return addDoc(col('locations'), { name, description, createdAt: serverTimestamp() });
+  return withTimeout(addDoc(col('locations'), { name, description, createdAt: serverTimestamp() }));
 }
 
 export async function renameCategory(oldName, newName, items) {
@@ -233,7 +233,7 @@ export async function renameCategory(oldName, newName, items) {
   for (const it of items.filter((i) => i.category === oldName)) {
     batch.update(doc(db, 'users', requireUser().uid, 'items', it.id), { category: newName, updatedAt: serverTimestamp() });
   }
-  await batch.commit();
+  await withTimeout(batch.commit());
 }
 
 export async function renameLocation(oldName, newName, items) {
@@ -244,7 +244,7 @@ export async function renameLocation(oldName, newName, items) {
   for (const it of items.filter((i) => i.location === oldName)) {
     batch.update(doc(db, 'users', requireUser().uid, 'items', it.id), { location: newName, updatedAt: serverTimestamp() });
   }
-  await batch.commit();
+  await withTimeout(batch.commit());
 }
 
 export async function deleteCategory(name, items) {
@@ -256,7 +256,7 @@ export async function deleteCategory(name, items) {
   for (const it of items.filter((i) => i.category === name)) {
     batch.update(doc(db, 'users', requireUser().uid, 'items', it.id), { category: '', updatedAt: serverTimestamp() });
   }
-  await batch.commit();
+  await withTimeout(batch.commit());
 }
 
 export async function deleteLocation(name, items) {
@@ -268,7 +268,7 @@ export async function deleteLocation(name, items) {
   for (const it of items.filter((i) => i.location === name)) {
     batch.update(doc(db, 'users', requireUser().uid, 'items', it.id), { location: '', updatedAt: serverTimestamp() });
   }
-  await batch.commit();
+  await withTimeout(batch.commit());
 }
 
 // ---------------- import backup ----------------
