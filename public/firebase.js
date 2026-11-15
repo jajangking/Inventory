@@ -14,6 +14,12 @@
  *   users/{uid}/photos/{photoId}     — { itemId, data (dataURL base64), createdAt }
  *   users/{uid}/categories/{id}      — { name, createdAt }
  *   users/{uid}/locations/{id}       — { name, description, createdAt }
+ *   users/{uid}/stock_movements/{id} — riwayat stok: itemId, itemName,
+ *                                      type (in/out/set), delta, qtyBefore,
+ *                                      qtyAfter, reason, createdAt
+ *   users/{uid}/loans/{id}           — peminjaman: itemId, itemName, borrower,
+ *                                      borrowedAt, dueDate, returnedAt, notes,
+ *                                      createdAt
  *
  * Catatan: foto disimpan di dokumen terpisah (bukan di dokumen item) supaya
  * list barang tetap ringan; foto diambil on-demand + di-cache di browser.
@@ -145,13 +151,16 @@ function listFromSnap(snap) {
 }
 
 export async function fetchAll() {
-  const [itemsSnap, catsSnap, locsSnap] = await withTimeout(Promise.all([
+  const [itemsSnap, catsSnap, locsSnap, movSnap, loansSnap] = await withTimeout(Promise.all([
     getDocs(col('items')), getDocs(col('categories')), getDocs(col('locations')),
+    getDocs(col('stock_movements')), getDocs(col('loans')),
   ]));
   return {
     items: itemsSnap.docs.map(itemFromDoc),
     categories: listFromSnap(catsSnap),
     locations: listFromSnap(locsSnap),
+    movements: movSnap.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: ts(d.data().createdAt) })),
+    loans: loansSnap.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: ts(d.data().createdAt) })),
   };
 }
 
@@ -211,6 +220,34 @@ export async function adjustQty(item, newQty, { type = 'set', reason = '' } = {}
     reason,
   });
   return after;
+}
+
+// ---------------- peminjaman (loans) ----------------
+
+/** Catat peminjaman barang (qty tidak berubah — barang tetap milik kita) */
+export async function createLoan({ itemId, itemName, borrower, borrowedAt, dueDate = '', notes = '' }) {
+  return withTimeout(addDoc(col('loans'), {
+    itemId: itemId || '',
+    itemName: itemName || '',
+    borrower: String(borrower || '').trim(),
+    borrowedAt: String(borrowedAt || ''),
+    dueDate: String(dueDate || ''),
+    returnedAt: null,
+    notes: String(notes || ''),
+    createdAt: serverTimestamp(),
+  }));
+}
+
+/** Tandai pinjaman sudah dikembalikan */
+export async function returnLoan(loanId) {
+  return withTimeout(updateDoc(doc(db, 'users', requireUser().uid, 'loans', loanId), {
+    returnedAt: new Date().toISOString(),
+  }));
+}
+
+/** Hapus riwayat pinjaman */
+export async function deleteLoan(loanId) {
+  return withTimeout(deleteDoc(doc(db, 'users', requireUser().uid, 'loans', loanId)));
 }
 
 // ---------------- foto (base64 di Firestore) ----------------
@@ -309,7 +346,7 @@ export async function importBackup(json) {
   const catById = new Map((json.categories || []).map((c) => [c.id, c.name]));
   const locById = new Map((json.locations || []).map((l) => [l.id, l.name]));
   const cats = new Set(), locs = new Set();
-  let itemsImported = 0, photosImported = 0, movesImported = 0;
+  let itemsImported = 0, photosImported = 0, movesImported = 0, loansImported = 0;
   const idByName = new Map(); // itemName -> itemId baru (buat relink riwayat stok)
 
   for (const raw of json.items || []) {
@@ -366,7 +403,24 @@ export async function importBackup(json) {
     } catch { /* satu riwayat gagal tidak menggagalkan import */ }
   }
 
-  return { itemsImported, photosImported, movesImported };
+  // riwayat peminjaman — relink ke item baru berdasarkan nama
+  for (const l of json.loans || []) {
+    try {
+      await withTimeout(addDoc(col('loans'), {
+        itemId: idByName.get(l.itemName) || '',
+        itemName: l.itemName || '',
+        borrower: String(l.borrower || ''),
+        borrowedAt: String(l.borrowedAt || ''),
+        dueDate: String(l.dueDate || ''),
+        returnedAt: l.returnedAt ? String(l.returnedAt) : null,
+        notes: String(l.notes || ''),
+        createdAt: l.created_at || l.createdAt || serverTimestamp(),
+      }));
+      loansImported += 1;
+    } catch { /* satu pinjaman gagal tidak menggagalkan import */ }
+  }
+
+  return { itemsImported, photosImported, movesImported, loansImported };
 }
 
 async function ensureNames(kind, names) {

@@ -10,6 +10,7 @@ import {
   fetchAll, createItem, updateItem, deleteItem,
   createPhotos, getPhotos, deletePhotos,
   adjustQty, logMovement,
+  createLoan, returnLoan, deleteLoan,
   addCategory, addLocation, renameCategory, renameLocation, deleteCategory, deleteLocation,
   importBackup, loadSampleData,
 } from './firebase.js';
@@ -55,6 +56,64 @@ function relTime(iso) {
 
 const MOVE_LABELS = { in: 'Masuk', out: 'Keluar', set: 'Penyesuaian' };
 const moveLabel = (m) => MOVE_LABELS[m.type] || 'Penyesuaian';
+
+function fmtIDRShort(n) {
+  n = Number(n) || 0;
+  if (Math.abs(n) >= 1e9) return `Rp ${(n / 1e9).toFixed(1).replace('.', ',')} M`;
+  if (Math.abs(n) >= 1e6) return `Rp ${(n / 1e6).toFixed(1).replace('.', ',')} jt`;
+  if (Math.abs(n) >= 1e3) return `Rp ${(n / 1e3).toFixed(0)} rb`;
+  return fmtIDR(n);
+}
+
+// ---------------- peminjaman ----------------
+const isActiveLoan = (l) => !l.returnedAt;
+const activeLoanFor = (itemId) => state.loans.find((l) => l.itemId === itemId && isActiveLoan(l)) || null;
+
+/** Info tenggat pinjaman → { label, cls } untuk chip */
+function dueChip(loan) {
+  if (!loan.dueDate) return { label: 'Tanpa tenggat', cls: '' };
+  const due = new Date(loan.dueDate + 'T23:59:59');
+  const days = Math.ceil((due.getTime() - Date.now()) / 86400000);
+  if (days < 0) return { label: `Terlambat ${-days} hari`, cls: 'overdue' };
+  if (days === 0) return { label: 'Jatuh tempo hari ini', cls: 'soon' };
+  if (days <= 3) return { label: `H-${days}`, cls: 'soon' };
+  return { label: `H-${days}`, cls: '' };
+}
+
+/** Modal pinjamkan barang — hasil: { borrower, borrowedAt, dueDate, notes } atau null */
+function loanModal(item) {
+  const today = new Date().toISOString().slice(0, 10);
+  return new Promise((resolve) => {
+    openModal(`
+      <h3>Pinjamkan barang</h3>
+      <p><b>${esc(item.name)}</b> — qty ${item.qty} ${esc(item.unit)}</p>
+      <div class="field"><label>Nama peminjam *</label>
+        <input class="input" id="l-borrower" maxlength="80" placeholder="mis. Rina, Adik, Pak RT..." /></div>
+      <div class="field"><label>Tanggal pinjam</label>
+        <input class="input" id="l-start" type="date" value="${today}" /></div>
+      <div class="field"><label>Tanggal harus kembali (opsional)</label>
+        <input class="input" id="l-due" type="date" /></div>
+      <div class="field"><label>Catatan (opsional)</label>
+        <input class="input" id="l-notes" maxlength="140" placeholder="mis. untuk acara sekolah..." /></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="l-cancel">Batal</button>
+        <button class="btn btn-primary" id="l-ok">Pinjamkan</button>
+      </div>`);
+    const done = (v) => { closeModal(); resolve(v); };
+    $('#l-cancel').onclick = () => done(null);
+    $('#l-ok').onclick = () => {
+      const borrower = $('#l-borrower').value.trim();
+      if (!borrower) { $('#l-borrower').focus(); return toast('Nama peminjam wajib diisi.', 'error'); }
+      done({
+        borrower,
+        borrowedAt: $('#l-start').value || today,
+        dueDate: $('#l-due').value || '',
+        notes: $('#l-notes').value.trim(),
+      });
+    };
+    $('#l-borrower').focus();
+  });
+}
 
 const CONDITION_LABELS = {
   baru: 'Baru', bekas_baik: 'Bekas (baik)', rusak_ringan: 'Rusak ringan', rusak: 'Rusak',
@@ -253,6 +312,7 @@ const state = {
   categories: [],
   locations: [],
   movements: [],
+  loans: [],
   photoCache: new Map(), // photoId -> dataURL | null
 };
 
@@ -261,7 +321,8 @@ async function refreshMeta() {
   state.items = data.items;
   state.categories = data.categories;
   state.locations = data.locations;
-  state.movements = data.movements;
+  state.movements = Array.isArray(data.movements) ? data.movements : [];
+  state.loans = Array.isArray(data.loans) ? data.loans : [];
 }
 
 /** Ambil data foto (on-demand + cache) — diam, tanpa overlay supaya tampilan tidak terganggu */
@@ -326,7 +387,8 @@ function setTopbar(visible) {
     $('#user-chip').textContent = state.user.displayName || state.user.email || 'Akun';
   }
   $$('[data-nav]').forEach((a) => a.classList.remove('active'));
-  const key = (location.hash || '').split('/')[1];
+  let key = (location.hash || '').split('/')[1];
+  if (key === 'stats') key = 'dashboard'; // halaman statistik tetap menyorot menu dashboard
   $$(`[data-nav="${key}"]`).forEach((a) => a.classList.add('active'));
 }
 
@@ -346,6 +408,7 @@ async function router() {
         if (parts[1]) return await viewItemDetail(parts[1]);
         return await viewItems();
       case 'settings': return await viewSettings();
+      case 'stats': return viewStats();
       case 'dashboard':
       default: return await viewDashboard();
     }
@@ -437,6 +500,9 @@ function computeStats() {
     recentMoves: [...state.movements]
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
       .slice(0, 8),
+    activeLoans: state.loans.filter(isActiveLoan)
+      .sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')),
+    overdueLoans: state.loans.filter((l) => isActiveLoan(l) && l.dueDate && dueChip(l).cls === 'overdue').length,
   };
 }
 
@@ -473,7 +539,10 @@ async function viewDashboard() {
         <h1 class="page-title">Halo, ${esc(state.user.displayName || state.user.email || 'teman')} 👋</h1>
         <p class="page-sub">Ringkasan inventaris barang kamu — ${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
       </div>
-      <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <a class="btn btn-outline" href="#/stats">📊 Statistik</a>
+        <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
+      </div>
     </div>
 
     ${s.totals.item_count === 0 ? `
@@ -487,7 +556,7 @@ async function viewDashboard() {
       </div>
     </div>` : ''}
 
-    <div class="grid grid-4">
+    <div class="grid stat-grid">
       <div class="card stat">
         <div class="stat-icon">${ICONS.box}</div>
         <div class="stat-label">Jenis Barang</div>
@@ -512,6 +581,12 @@ async function viewDashboard() {
         <div class="stat-value">${s.totals.photo_count}</div>
         <div class="stat-hint">foto barang</div>
       </div>
+      <div class="card stat">
+        <div class="stat-icon">🤝</div>
+        <div class="stat-label">Sedang Dipinjam</div>
+        <div class="stat-value" style="${s.overdueLoans ? 'color:var(--danger)' : ''}">${s.activeLoans.length}</div>
+        <div class="stat-hint">${s.overdueLoans ? `${s.overdueLoans} terlambat kembali!` : 'pinjaman aktif'}</div>
+      </div>
     </div>
 
     <div class="grid grid-2 section-gap">
@@ -524,6 +599,24 @@ async function viewDashboard() {
         ${bars(s.byCategory, maxCat, true)}
       </div>
     </div>
+
+    ${s.activeLoans.length ? `
+    <div class="card card-pad section-gap">
+      <h3 class="card-title">Peminjaman Aktif 🤝</h3>
+      <div class="loan-list">${s.activeLoans.map((l) => {
+        const due = dueChip(l);
+        return `
+        <div class="loan-row" data-loan-item="${l.itemId}">
+          <div class="mini-thumb">🤝</div>
+          <div class="mini-info">
+            <div class="mini-name">${esc(l.itemName || 'Barang')}</div>
+            <div class="mini-sub">dipinjam <b>${esc(l.borrower)}</b> · sejak ${fmtDate(l.borrowedAt)}${l.dueDate ? ` · tenggat ${fmtDate(l.dueDate)}` : ''}</div>
+          </div>
+          <span class="chip due-chip ${due.cls}">${due.label}</span>
+          <button class="btn btn-success btn-sm" data-return-loan="${l.id}">↩ Kembalikan</button>
+        </div>`;
+      }).join('')}</div>
+    </div>` : ''}
 
     <div class="grid grid-3 section-gap">
       <div class="card card-pad">
@@ -563,6 +656,23 @@ async function viewDashboard() {
 
   $$('.mini-row').forEach((row) => row.addEventListener('click', () => {
     if (row.dataset.id) navigate(`#/items/${row.dataset.id}`);
+  }));
+
+  // ---- peminjaman aktif ----
+  $$('[data-loan-item]').forEach((row) => row.addEventListener('click', () => navigate(`#/items/${row.dataset.loanItem}`)));
+  $$('[data-return-loan]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (b.disabled) return;
+    try {
+      setBtnLoading(b, true);
+      await returnLoan(b.dataset.returnLoan);
+      await refreshMeta();
+      toast('Barang sudah dikembalikan. 🤝');
+      viewDashboard();
+    } catch (err) {
+      toast(friendlyError(err), 'error');
+      setBtnLoading(b, false);
+    }
   }));
 
   // isi foto mini secara async setelah tampilan ter-render
@@ -613,6 +723,7 @@ async function viewItems() {
       <div class="item-body">
         <h3 class="item-name">${esc(it.name)}</h3>
         <div class="item-meta">
+          ${activeLoanFor(it.id) ? '<span class="chip chip-loan">🤝 Dipinjam</span>' : ''}
           ${it.category ? `<span class="chip chip-primary">${esc(it.category)}</span>` : ''}
           ${it.location ? `<span class="chip">📍 ${esc(it.location)}</span>` : ''}
         </div>
@@ -766,6 +877,25 @@ async function viewItemDetail(id) {
       <span class="move-delta ${m.delta >= 0 ? 'up' : 'down'}">${m.delta >= 0 ? '+' : ''}${m.delta}</span>
     </div>`).join('') : '<p class="page-sub">Belum ada pergerakan stok untuk barang ini. Pakai tombol +/− atau "Penyesuaian Manual" untuk mencatat.</p>';
 
+  const loans = [...state.loans]
+    .filter((l) => l.itemId === it.id)
+    .sort((a, b) => (isActiveLoan(a) ? 0 : 1) - (isActiveLoan(b) ? 0 : 1)
+      || new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const activeLoan = loans.find(isActiveLoan) || null;
+  const due = activeLoan ? dueChip(activeLoan) : null;
+  const loanHtml = loans.length ? loans.map((l) => {
+    const d = dueChip(l);
+    return `
+    <div class="move-row">
+      <span class="chip ${l.returnedAt ? 'chip-ok' : `due-chip ${d.cls}`}">${l.returnedAt ? 'Selesai' : d.label}</span>
+      <div class="move-info">
+        <b>${esc(l.borrower)}</b> · ${fmtDate(l.borrowedAt)} → ${l.returnedAt ? fmtDate(l.returnedAt) : (l.dueDate ? `tenggat ${fmtDate(l.dueDate)}` : 'tanpa tenggat')}${l.notes ? ` · ${esc(l.notes)}` : ''}
+        <div class="mini-sub">${l.returnedAt ? 'sudah dikembalikan' : 'masih dipinjam'}</div>
+      </div>
+      ${l.returnedAt ? `<button class="btn btn-outline btn-sm" data-del-loan="${l.id}" title="Hapus riwayat">🗑️</button>` : ''}
+    </div>`;
+  }).join('') : '<p class="page-sub">Belum ada riwayat peminjaman. Barang bisa dipinjamkan ke teman/keluarga tanpa mengubah qty.</p>';
+
   $('#app').innerHTML = `
     <div class="page-head">
       <div>
@@ -797,6 +927,16 @@ async function viewItemDetail(id) {
         ${it.notes ? `<div class="card card-pad section-gap"><h3 class="card-title">Catatan</h3><p style="margin:0;white-space:pre-wrap">${esc(it.notes)}</p></div>` : ''}
       </div>
       <div>
+        ${activeLoan ? `
+        <div class="card card-pad loan-banner ${due.cls === 'overdue' ? 'is-overdue' : ''}">
+          <h3 class="card-title">Sedang Dipinjam 🤝</h3>
+          <p style="margin:6px 0 0"><b>${esc(activeLoan.borrower)}</b> meminjam barang ini sejak ${fmtDate(activeLoan.borrowedAt)}${activeLoan.dueDate ? `, tenggat kembali ${fmtDate(activeLoan.dueDate)}` : ''}.</p>
+          <div class="item-meta" style="margin-top:10px;align-items:center">
+            <span class="chip due-chip ${due.cls}">${due.label}</span>
+            <button class="btn btn-success btn-sm" id="loan-return">↩ Tandai Dikembalikan</button>
+          </div>
+        </div>` : ''}
+
         <div class="card card-pad">
           <h3 class="card-title">Detail</h3>
           <div class="qty-panel">
@@ -823,6 +963,12 @@ async function viewItemDetail(id) {
           <h3 class="card-title">Riwayat Stok 📜</h3>
           <div class="move-list">${moveHtml}</div>
           <button class="btn btn-outline btn-sm" id="q-adjust" style="margin-top:14px">＋ Penyesuaian Manual</button>
+        </div>
+
+        <div class="card card-pad section-gap">
+          <h3 class="card-title">Peminjaman 🤝</h3>
+          <div class="move-list">${loanHtml}</div>
+          ${activeLoan ? '' : '<button class="btn btn-outline btn-sm" id="loan-new" style="margin-top:14px">＋ Pinjamkan Barang Ini</button>'}
         </div>
       </div>
     </div>`;
@@ -866,6 +1012,46 @@ async function viewItemDetail(id) {
       viewItemDetail(id);
     } catch (e) { toast(friendlyError(e), 'error'); }
   });
+
+  // ---- peminjaman ----
+  $('#loan-new')?.addEventListener('click', async () => {
+    const res = await loanModal(it);
+    if (!res) return;
+    try {
+      await withLoading('Mencatat peminjaman...', () =>
+        createLoan({ itemId: it.id, itemName: it.name, ...res }));
+      await refreshMeta();
+      toast(`Dipinjamkan ke ${res.borrower}. 🤝`);
+      viewItemDetail(id);
+    } catch (e) { toast(friendlyError(e), 'error'); }
+  });
+
+  $('#loan-return')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    try {
+      setBtnLoading(btn, true);
+      await returnLoan(activeLoan.id);
+      await refreshMeta();
+      toast('Barang sudah dikembalikan. 🤝');
+      viewItemDetail(id);
+    } catch (err) { toast(friendlyError(err), 'error'); setBtnLoading(btn, false); }
+  });
+
+  $$('[data-del-loan]').forEach((b) => b.addEventListener('click', async () => {
+    if (b.disabled) return;
+    if (!await confirmModal({
+      title: 'Hapus riwayat peminjaman?', danger: true, confirmText: 'Hapus',
+      message: 'Riwayat pinjaman ini akan dihapus permanen.',
+    })) return;
+    try {
+      setBtnLoading(b, true);
+      await deleteLoan(b.dataset.delLoan);
+      await refreshMeta();
+      toast('Riwayat pinjaman dihapus.');
+      viewItemDetail(id);
+    } catch (err) { toast(friendlyError(err), 'error'); setBtnLoading(b, false); }
+  }));
 
   $('#del-btn').addEventListener('click', async () => {
     if (!await confirmModal({ title: 'Hapus barang?', message: `"${it.name}" akan dihapus permanen beserta fotonya.` })) return;
@@ -1135,6 +1321,173 @@ async function viewItemForm(id) {
 }
 
 // ---------------- settings ----------------
+// ---------------- statistik ----------------
+function viewStats() {
+  const items = state.items;
+  const s = computeStats();
+
+  // tren 12 bulan: nilai kumulatif per akhir bulan (berdasarkan tanggal beli, fallback tanggal dibuat)
+  const now = new Date();
+  const months = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      label: d.toLocaleDateString('id-ID', { month: 'short' }),
+      start: new Date(d.getFullYear(), d.getMonth(), 1),
+      end: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999),
+      value: 0,
+      added: 0,
+    });
+  }
+  for (const it of items) {
+    const when = new Date(it.purchaseDate || it.createdAt || 0);
+    if (Number.isNaN(when.getTime())) continue;
+    for (const m of months) {
+      if (when <= m.end) m.value += it.total_value;
+      if (when >= m.start && when <= m.end) m.added += 1;
+    }
+  }
+  const added12 = months.reduce((sum, m) => sum + m.added, 0);
+
+  // ---- grafik area SVG (tren nilai) ----
+  const W = 720, H = 250, PL = 14, PR = 14, PT = 22, PB = 34;
+  const maxV = Math.max(...months.map((m) => m.value), 1);
+  const xAt = (i) => PL + (i * (W - PL - PR)) / (months.length - 1);
+  const yAt = (v) => PT + (1 - v / maxV) * (H - PT - PB);
+  const pts = months.map((m, i) => [xAt(i), yAt(m.value)]);
+  const linePath = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${xAt(months.length - 1).toFixed(1)},${yAt(0)} L${xAt(0).toFixed(1)},${yAt(0)} Z`;
+  const gridlines = [0, 0.25, 0.5, 0.75, 1].map((fr) => `
+      <line x1="${PL}" y1="${yAt(maxV * fr).toFixed(1)}" x2="${W - PR}" y2="${yAt(maxV * fr).toFixed(1)}" class="chart-grid" />
+      <text x="${W - PR}" y="${(yAt(maxV * fr) - 6).toFixed(1)}" class="chart-grid-label" text-anchor="end">${fmtIDRShort(maxV * fr)}</text>`).join('');
+  const monthLabels = months.map((m, i) => `
+      <text x="${xAt(i).toFixed(1)}" y="${H - 10}" class="chart-x-label" text-anchor="middle">${m.label}</text>`).join('');
+  const dots = pts.map((p, i) => `
+      <circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${i === pts.length - 1 ? 6 : 3.5}" class="chart-dot${i === pts.length - 1 ? ' last' : ''}" />`).join('');
+  const lastVal = months[months.length - 1].value;
+  const trendSvg = `
+    <svg viewBox="0 0 ${W} ${H}" class="trend-svg" role="img" aria-label="Tren nilai inventaris 12 bulan terakhir">
+      <defs>
+        <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--primary)" stop-opacity=".35" />
+          <stop offset="100%" stop-color="var(--primary)" stop-opacity=".02" />
+        </linearGradient>
+      </defs>
+      ${gridlines}
+      <path d="${areaPath}" fill="url(#trend-fill)" />
+      <path d="${linePath}" class="chart-line" />
+      ${dots}
+      <text x="${(xAt(months.length - 1) - 10).toFixed(1)}" y="${(yAt(lastVal) - 14).toFixed(1)}" class="chart-value-label" text-anchor="end">${fmtIDRShort(lastVal)}</text>
+      ${monthLabels}
+    </svg>`;
+
+  // ---- baris bar horizontal (kategori / lokasi) ----
+  const statBars = (rows, max, alt = false) => rows.length ? rows.map((r) => `
+      <div class="bar-row">
+        <div class="bar-head"><b>${esc(r.name)}</b>
+          <span>${fmtIDRShort(r.total_value)} · ${r.item_count} item · ${s.totals.total_value ? Math.round((r.total_value / s.totals.total_value) * 100) : 0}%</span></div>
+        <div class="bar-track"><div class="bar-fill ${alt ? 'alt' : ''}"
+          style="width:${Math.max(3, Math.round((r.total_value / max) * 100))}%"></div></div>
+      </div>`).join('') : '<p class="page-sub">Belum ada data.</p>';
+
+  // ---- donut kondisi (conic-gradient CSS) ----
+  const kondisiColors = { baik: 'var(--ok)', rusak_ringan: 'var(--warning)', rusak_berat: 'var(--danger)' };
+  const fallbackColors = ['var(--primary)', 'var(--accent)', 'var(--warning)', 'var(--danger)'];
+  const kondisiMap = new Map();
+  for (const it of items) {
+    const k = it.condition || 'baik';
+    kondisiMap.set(k, (kondisiMap.get(k) || 0) + 1);
+  }
+  const kondisiRows = [...kondisiMap.entries()]
+    .map(([key, count]) => ({ key, label: CONDITION_LABELS[key] || key, count }))
+    .sort((a, b) => b.count - a.count);
+  const kTotal = Math.max(items.length, 1);
+  let accDeg = 0;
+  const conicParts = kondisiRows.map((r, i) => {
+    const from = (accDeg / kTotal) * 360;
+    accDeg += r.count;
+    return `${kondisiColors[r.key] || fallbackColors[i % fallbackColors.length]} ${from.toFixed(1)}deg ${((accDeg / kTotal) * 360).toFixed(1)}deg`;
+  });
+  const kondisiLegend = kondisiRows.map((r, i) => `
+        <div class="legend-item">
+          <span class="legend-dot" style="background:${kondisiColors[r.key] || fallbackColors[i % fallbackColors.length]}"></span>
+          <span class="legend-label">${esc(r.label)}</span>
+          <span class="legend-val">${r.count} item · ${Math.round((r.count / kTotal) * 100)}%</span>
+        </div>`).join('');
+
+  $('#app').innerHTML = `
+    <div class="page-head">
+      <div>
+        <a href="#/dashboard" class="page-sub">← Kembali ke dashboard</a>
+        <h1 class="page-title" style="margin-top:6px">Statistik Inventaris 📊</h1>
+        <p class="page-sub">Gambaran nilai, komposisi, dan tren barang kamu.</p>
+      </div>
+      <a class="btn btn-outline" href="#/items">📦 Lihat Barang</a>
+    </div>
+
+    ${items.length === 0 ? `
+    <div class="card card-pad empty">
+      <div style="font-size:38px">📈</div>
+      <h3>Belum ada data untuk ditampilkan</h3>
+      <p>Tambahkan barang dulu — grafiknya akan muncul otomatis di sini.</p>
+      <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
+    </div>` : `
+
+    <div class="grid stat-grid">
+      <div class="card stat">
+        <div class="stat-icon">💰</div>
+        <div class="stat-label">Total Nilai</div>
+        <div class="stat-value" style="color:var(--primary-strong)">${fmtIDR(s.totals.total_value)}</div>
+        <div class="stat-hint">seluruh inventaris</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon">📦</div>
+        <div class="stat-label">Total Qty</div>
+        <div class="stat-value">${s.totals.total_qty}</div>
+        <div class="stat-hint">keseluruhan satuan</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon">🧮</div>
+        <div class="stat-label">Rata-rata / Item</div>
+        <div class="stat-value">${fmtIDRShort(s.totals.total_value / Math.max(items.length, 1))}</div>
+        <div class="stat-hint">nilai rata-rata barang</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-icon">🗓️</div>
+        <div class="stat-label">Masuk 12 Bulan</div>
+        <div class="stat-value">${added12}</div>
+        <div class="stat-hint">item baru (dari tanggal beli)</div>
+      </div>
+    </div>
+
+    <div class="card card-pad section-gap">
+      <h3 class="card-title">Tren Nilai Inventaris 📈</h3>
+      <p class="page-sub">Akumulasi total nilai per bulan (berdasarkan tanggal beli) — 12 bulan terakhir.</p>
+      <div class="chart-wrap">${trendSvg}</div>
+    </div>
+
+    <div class="grid grid-2 section-gap">
+      <div class="card card-pad">
+        <h3 class="card-title">Nilai per Kategori 🏷️</h3>
+        ${statBars(s.byCategory, Math.max(...s.byCategory.map((c) => c.total_value), 1), true)}
+      </div>
+      <div class="card card-pad">
+        <h3 class="card-title">Nilai per Lokasi 📍</h3>
+        ${statBars(s.byLocation, Math.max(...s.byLocation.map((l) => l.total_value), 1))}
+      </div>
+    </div>
+
+    <div class="card card-pad section-gap">
+      <h3 class="card-title">Kondisi Barang 🛠️</h3>
+      <div class="donut-flex">
+        <div class="donut" style="background:conic-gradient(${conicParts.join(', ')})">
+          <div class="donut-hole"><b>${items.length}</b><span>item</span></div>
+        </div>
+        <div class="donut-legend">${kondisiLegend}</div>
+      </div>
+    </div>`}`;
+}
+
 async function viewSettings() {
   renderViewLoading('Memuat pengaturan...');
   const items = state.items;
@@ -1341,6 +1694,13 @@ async function viewSettings() {
             qtyBefore: m.qtyBefore, qtyAfter: m.qtyAfter,
             reason: m.reason, created_at: m.createdAt,
           })),
+        loans: [...state.loans]
+          .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+          .map((l) => ({
+            itemName: l.itemName, borrower: l.borrower,
+            borrowedAt: l.borrowedAt, dueDate: l.dueDate,
+            returnedAt: l.returnedAt, notes: l.notes, created_at: l.createdAt,
+          })),
       };
       downloadFile(JSON.stringify(backup, null, 2),
         `inventory-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
@@ -1366,7 +1726,7 @@ async function viewSettings() {
       const json = JSON.parse(await file.text());
       const r = await withLoading(`Mengimport ${file.name}...`, () => importBackup(json));
       await refreshMeta();
-      toast(`Import berhasil: ${r.itemsImported} item, ${r.photosImported} foto, ${r.movesImported || 0} riwayat stok.`);
+      toast(`Import berhasil: ${r.itemsImported} item, ${r.photosImported} foto, ${r.movesImported || 0} riwayat stok, ${r.loansImported || 0} peminjaman.`);
       viewSettings();
     } catch (err) {
       toast(err instanceof SyntaxError ? 'File backup tidak valid.' : friendlyError(err), 'error');
