@@ -21,7 +21,7 @@
  */
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   onAuthStateChanged, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
@@ -63,12 +63,33 @@ const FIREBASE_ERRORS = {
   'auth/popup-closed-by-user': 'Login dibatalkan.',
   'auth/unauthorized-domain': 'Domain ini belum terdaftar di Firebase Console → Authentication → Authorized domains.',
   'auth/operation-not-allowed': 'Metode login Google belum diaktifkan di Firebase Console → Authentication → Sign-in method.',
-  'auth/network-request-failed': 'Koneksi ke Firebase gagal. Cek internet lo.',
+  'auth/network-request-failed': 'Koneksi ke Firebase gagal. Cek internet kamu.',
   'permission-denied': 'Akses ditolak — cek Firestore Security Rules di Firebase Console.',
 };
 
 export function friendlyError(err) {
+  if (err?.code === 'permission-denied') {
+    return 'Akses ditolak — kemungkinan besar Firestore Security Rules belum disetup di Firebase Console (lihat langkah di README), atau kamu belum login.';
+  }
   return FIREBASE_ERRORS[err?.code] || err?.message || 'Terjadi kesalahan.';
+}
+
+/** Balut promise dengan timeout supaya loading tidak menggantung selamanya */
+export function withTimeout(promise, ms = 20000, message = 'Koneksi ke Firebase lambat atau terputus. Cek internet kamu, lalu coba lagi.') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
+/** Ambil hasil signInWithRedirect (jika ada) untuk menampilkan error login */
+export async function checkRedirectResult() {
+  try {
+    await getRedirectResult(auth);
+    return null;
+  } catch (err) {
+    return friendlyError(err);
+  }
 }
 
 // ---------------- auth ----------------
@@ -124,9 +145,9 @@ function listFromSnap(snap) {
 }
 
 export async function fetchAll() {
-  const [itemsSnap, catsSnap, locsSnap] = await Promise.all([
+  const [itemsSnap, catsSnap, locsSnap] = await withTimeout(Promise.all([
     getDocs(col('items')), getDocs(col('categories')), getDocs(col('locations')),
-  ]);
+  ]));
   return {
     items: itemsSnap.docs.map(itemFromDoc),
     categories: listFromSnap(catsSnap),
@@ -178,14 +199,14 @@ export async function createPhotos(itemId, dataUrls) {
 /** Ambil isi foto berdasarkan id → Map<photoId, dataURL> */
 export async function getPhotos(photoIds) {
   const out = new Map();
-  await Promise.all((photoIds || []).map(async (id) => {
+  await withTimeout(Promise.all((photoIds || []).map(async (id) => {
     try {
       const snap = await getDoc(doc(db, 'users', requireUser().uid, 'photos', id));
       out.set(id, snap.data()?.data || null);
     } catch {
       out.set(id, null);
     }
-  }));
+  })));
   return out;
 }
 

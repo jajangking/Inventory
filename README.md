@@ -1,8 +1,8 @@
 # 📦 Inventory — Catatan Barang Pribadi
 
-Web app buat mencatat semua barang yang lo punya: **nama, qty, nilai (Rp), tempat nyimpan, kondisi, tanggal beli, foto, dan timestamp** — lengkap dengan dashboard total nilai inventaris, pencarian/filter, export CSV, dan backup JSON.
+Web app buat mencatat semua barang yang kamu punya: **nama, qty, nilai (Rp), tempat nyimpan, kondisi, tanggal beli, foto, dan timestamp** — lengkap dengan dashboard total nilai inventaris, pencarian/filter, export CSV, dan backup JSON.
 
-Data tersimpan di **Firebase** (akun Google lo): login via **Google Sign-In**, data & foto di **Firestore** — 100% gratis di plan Spark, **tanpa kartu kredit**. Bisa dibuka dari HP maupun laptop.
+Data tersimpan di **Firebase** (akun Google kamu): login via **Google Sign-In**, data & foto di **Firestore** — 100% gratis di plan Spark, **tanpa kartu kredit**. Bisa dibuka dari HP maupun laptop.
 
 > 💡 Kenapa foto di Firestore, bukan Cloud Storage? Sejak 3 Feb 2026, Cloud Storage wajib plan Blaze (berbayar). Foto disimpan sebagai base64 di dokumen Firestore (kompres otomatis ≤ ~850KB/foto) — gratis, privat per user, tanpa billing.
 
@@ -38,7 +38,7 @@ App ini memakai Firebase project **`dimonitor-1c806`** (config ada di `public/fi
 ### 1. Aktifkan Google Sign-In
 **Authentication → Sign-in method → Google → Enable → Save**
 
-### 2. Daftarkan domain preview / domain lo
+### 2. Daftarkan domain preview / domain kamu
 **Authentication → Settings → Authorized domains → Add domain**
 - Kalau jalan lokal: `localhost` sudah terdaftar otomatis
 - Kalau dibuka lewat preview Arena: tambahkan domain-nya persis seperti di address bar (format `xxxx-xxxxx.e2b.app`)
