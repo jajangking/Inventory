@@ -73,13 +73,14 @@ function showLoading(msg = 'Memuat...') {
   }
   $('.loading-msg', el).textContent = msg;
   el.hidden = false;
+  el.style.display = ''; // pastikan tampil (pengaman dari bug display vs hidden)
 }
 
 function hideLoading() {
   loadingCount = Math.max(0, loadingCount - 1);
   if (loadingCount === 0) {
     const el = $('#loading-overlay');
-    if (el) el.hidden = true;
+    if (el) { el.hidden = true; el.style.display = 'none'; }
   }
 }
 
@@ -87,7 +88,7 @@ function hideLoading() {
 function resetLoading() {
   loadingCount = 0;
   const el = $('#loading-overlay');
-  if (el) el.hidden = true;
+  if (el) { el.hidden = true; el.style.display = 'none'; }
 }
 
 /** Bungkus aksi yang nunggu respon server — overlay spinner + pesan */
@@ -101,6 +102,7 @@ async function withLoading(msg, fn) {
 function setBtnLoading(btn, on, label = '') {
   if (!btn) return;
   if (on) {
+    if (btn.classList.contains('loading')) return; // jangan double-set (rusak data tombol asli)
     btn.dataset.origHtml = btn.innerHTML;
     btn.disabled = true;
     btn.classList.add('loading');
@@ -910,6 +912,7 @@ async function viewItemForm(id) {
       notes: fd.get('notes') || '',
     };
     const saveBtn = $('#save-btn');
+    if (saveBtn.disabled) return; // cegah submit ganda
     setBtnLoading(saveBtn, true, 'Menyimpan...');
     let savedId = editing ? id : null;
     try {
@@ -1035,6 +1038,7 @@ async function viewSettings() {
   $('#add-cat-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button');
+    if (btn.disabled) return; // cegah submit ganda
     setBtnLoading(btn, true);
     try {
       await withLoading('Menyimpan kategori...', () => addCategory(String(new FormData(e.target).get('name')).trim()));
@@ -1072,6 +1076,7 @@ async function viewSettings() {
   $('#add-loc-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button');
+    if (btn.disabled) return; // cegah submit ganda
     setBtnLoading(btn, true);
     try {
       await withLoading('Menyimpan lokasi...', () => addLocation(String(new FormData(e.target).get('name')).trim()));
