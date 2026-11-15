@@ -6,7 +6,7 @@
 'use strict';
 
 import {
-  watchAuth, googleSignIn, logout as fbLogout, friendlyError,
+  watchAuth, googleSignIn, logout as fbLogout, friendlyError, checkRedirectResult,
   fetchAll, createItem, updateItem, deleteItem,
   createPhotos, getPhotos, deletePhotos,
   addCategory, addLocation, renameCategory, renameLocation, deleteCategory, deleteLocation,
@@ -81,6 +81,13 @@ function hideLoading() {
     const el = $('#loading-overlay');
     if (el) el.hidden = true;
   }
+}
+
+/** Paksa bersihkan overlay — jaga-jaga kalau ada proses yang tidak selesai */
+function resetLoading() {
+  loadingCount = 0;
+  const el = $('#loading-overlay');
+  if (el) el.hidden = true;
 }
 
 /** Bungkus aksi yang nunggu respon server — overlay spinner + pesan */
@@ -198,12 +205,12 @@ async function refreshMeta() {
   state.locations = data.locations;
 }
 
-/** Ambil data foto (on-demand + cache) → array dataURL sesuai urutan refs */
+/** Ambil data foto (on-demand + cache) — diam, tanpa overlay supaya tampilan tidak terganggu */
 async function loadPhotos(photoRefs) {
   const refs = photoRefs || [];
   const need = refs.filter((id) => !state.photoCache.has(id));
   if (need.length) {
-    const fetched = await withLoading('Memuat foto...', () => getPhotos(need));
+    const fetched = await getPhotos(need);
     for (const id of need) state.photoCache.set(id, fetched.get(id) || null);
   }
   return refs.map((id) => state.photoCache.get(id) || null);
@@ -265,6 +272,7 @@ function setTopbar(visible) {
 }
 
 async function router() {
+  resetLoading();
   const hash = location.hash || '#/dashboard';
   const parts = hash.replace(/^#\//, '').split('/');
 
@@ -274,16 +282,39 @@ async function router() {
   try {
     switch (parts[0]) {
       case 'items':
-        if (parts[1] === 'new') return viewItemForm(null);
-        if (parts[1] && parts[2] === 'edit') return viewItemForm(parts[1]);
-        if (parts[1]) return viewItemDetail(parts[1]);
-        return viewItems();
-      case 'settings': return viewSettings();
+        if (parts[1] === 'new') return await viewItemForm(null);
+        if (parts[1] && parts[2] === 'edit') return await viewItemForm(parts[1]);
+        if (parts[1]) return await viewItemDetail(parts[1]);
+        return await viewItems();
+      case 'settings': return await viewSettings();
       case 'dashboard':
-      default: return viewDashboard();
+      default: return await viewDashboard();
     }
   } catch (e) {
-    toast(friendlyError(e), 'error');
+    renderErrorView(e);
+  }
+}
+
+/** Tampilan error — tidak bikin loading stuck, ada tombol coba lagi */
+function renderErrorView(err) {
+  $('#app').innerHTML = `
+    <div class="empty">
+      <div style="font-size:38px">⚠️</div>
+      <h3>Gagal memuat data</h3>
+      <p>${esc(friendlyError(err))}</p>
+      <button class="btn btn-primary" id="retry-btn">🔄 Coba Lagi</button>
+    </div>`;
+  $('#retry-btn')?.addEventListener('click', () => refreshAndRender());
+}
+
+/** Muat ulang data lalu render view — dipakai boot & tombol coba lagi */
+async function refreshAndRender() {
+  resetLoading();
+  try {
+    if (state.user) await refreshMeta();
+    await router();
+  } catch (e) {
+    renderErrorView(e);
   }
 }
 
@@ -352,12 +383,8 @@ async function viewDashboard() {
   const maxCat = Math.max(...s.byCategory.map((c) => c.total_value), 1);
   const maxLoc = Math.max(...s.byLocation.map((l) => l.total_value), 1);
 
-  // preload foto utama (cache-friendly)
+  // foto utama diisi menyusul (tanpa memblokir tampilan)
   const miniAll = [...s.recent, ...s.topValue];
-  const thumbs = new Map();
-  await Promise.all(miniAll.map(async (r) => {
-    if (!thumbs.has(r.id)) thumbs.set(r.id, await loadPrimaryPhoto(r));
-  }));
 
   const bars = (rows, max, alt = false) => rows.length ? rows.map((r) => `
     <div class="bar-row">
@@ -368,12 +395,9 @@ async function viewDashboard() {
     </div>`).join('') : `<p class="page-sub">Belum ada data.</p>`;
 
   const miniItems = (rows) => rows.map((r) => {
-    const photo = thumbs.get(r.id);
     return `
     <div class="mini-row" data-id="${r.id}">
-      <div class="mini-thumb">${photo
-        ? `<img src="${esc(photo)}" alt="" loading="lazy" />`
-        : ICONS.box}</div>
+      <div class="mini-thumb">${ICONS.box}</div>
       <div class="mini-info">
         <div class="mini-name">${esc(r.name)}</div>
         <div class="mini-sub">${r.qty} ${esc(r.unit)} · ${r.total_value ? fmtIDR(r.total_value) : '—'}</div>
@@ -457,13 +481,22 @@ async function viewDashboard() {
     })) return;
     try {
       await withLoading('Memuat data contoh...', () => loadSampleData());
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Data contoh dimuat!');
       viewDashboard();
     } catch (e) { toast(friendlyError(e), 'error'); }
   });
 
   $$('.mini-row').forEach((row) => row.addEventListener('click', () => navigate(`#/items/${row.dataset.id}`)));
+
+  // isi foto mini secara async setelah tampilan ter-render
+  miniAll.forEach((r) => {
+    if (!r.photoRefs?.length) return;
+    loadPrimaryPhoto(r).then((src) => {
+      const thumb = $(`.mini-row[data-id="${r.id}"] .mini-thumb`);
+      if (thumb && src) thumb.innerHTML = `<img src="${esc(src)}" alt="" loading="lazy" />`;
+    }).catch(() => { /* biarkan placeholder */ });
+  });
 }
 
 // ---------------- items list ----------------
@@ -496,19 +529,11 @@ async function viewItems() {
   if (f.page > pages) f.page = pages;
   const pageItems = list.slice((f.page - 1) * f.limit, f.page * f.limit);
 
-  // preload foto utama tiap kartu (cache-friendly)
-  const thumbs = new Map();
-  await Promise.all(pageItems.map(async (it) => {
-    thumbs.set(it.id, await loadPrimaryPhoto(it));
-  }));
-
+  // foto utama kartu diisi menyusul (tanpa memblokir tampilan)
   const cards = pageItems.map((it) => {
-    const photo = thumbs.get(it.id);
     return `
     <div class="card item-card" data-id="${it.id}">
-      <div class="item-thumb">${photo
-        ? `<img src="${esc(photo)}" alt="${esc(it.name)}" loading="lazy" />`
-        : `<div class="placeholder">${ICONS.camera}</div>`}</div>
+      <div class="item-thumb"><div class="placeholder">${ICONS.camera}</div></div>
       <div class="item-body">
         <h3 class="item-name">${esc(it.name)}</h3>
         <div class="item-meta">
@@ -599,6 +624,15 @@ async function viewItems() {
     const v = input?.value || '';
     input?.setSelectionRange(v.length, v.length);
   }
+
+  // isi foto kartu secara async setelah tampilan ter-render
+  pageItems.forEach((it) => {
+    if (!it.photoRefs?.length) return;
+    loadPrimaryPhoto(it).then((src) => {
+      const thumb = $(`.item-card[data-id="${it.id}"] .item-thumb`);
+      if (thumb && src) thumb.innerHTML = `<img src="${esc(src)}" alt="${esc(it.name)}" loading="lazy" />`;
+    }).catch(() => { /* biarkan placeholder */ });
+  });
 }
 
 // ---------------- item detail ----------------
@@ -672,7 +706,7 @@ async function viewItemDetail(id) {
     setBtnLoading(btn, true, 'Menghapus...');
     try {
       await withLoading('Menghapus barang...', () => deleteItem(it.id));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Barang dihapus.');
       navigate('#/items');
     } catch (e) {
@@ -911,7 +945,7 @@ async function viewItemForm(id) {
         await updateItem(itemId, { photoRefs: finalRefs, primaryPhotoIndex: primaryIndex });
       });
 
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast(editing ? 'Perubahan tersimpan.' : 'Barang ditambahkan!');
       navigate(`#/items/${savedId}`);
     } catch (err) {
@@ -1004,7 +1038,7 @@ async function viewSettings() {
     setBtnLoading(btn, true);
     try {
       await withLoading('Menyimpan kategori...', () => addCategory(String(new FormData(e.target).get('name')).trim()));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Kategori ditambahkan.');
       viewSettings();
     } catch (err) {
@@ -1018,7 +1052,7 @@ async function viewSettings() {
     if (!name || name === oldName) return;
     try {
       await withLoading('Mengubah kategori...', () => renameCategory(oldName, name, state.items));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Kategori diubah (item ikut ter-update).');
       viewSettings();
     } catch (err) { toast(friendlyError(err), 'error'); }
@@ -1028,7 +1062,7 @@ async function viewSettings() {
     if (!await confirmModal({ title: 'Hapus kategori?', message: `"${name}" akan dihapus. Barang di kategori ini jadi tanpa kategori.` })) return;
     try {
       await withLoading('Menghapus kategori...', () => deleteCategory(name, state.items));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Kategori dihapus.');
       viewSettings();
     } catch (err) { toast(friendlyError(err), 'error'); }
@@ -1041,7 +1075,7 @@ async function viewSettings() {
     setBtnLoading(btn, true);
     try {
       await withLoading('Menyimpan lokasi...', () => addLocation(String(new FormData(e.target).get('name')).trim()));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Lokasi ditambahkan.');
       viewSettings();
     } catch (err) {
@@ -1055,7 +1089,7 @@ async function viewSettings() {
     if (!name || name === oldName) return;
     try {
       await withLoading('Mengubah lokasi...', () => renameLocation(oldName, name, state.items));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Lokasi diubah (item ikut ter-update).');
       viewSettings();
     } catch (err) { toast(friendlyError(err), 'error'); }
@@ -1065,7 +1099,7 @@ async function viewSettings() {
     if (!await confirmModal({ title: 'Hapus lokasi?', message: `"${name}" akan dihapus. Barang di lokasi ini jadi tanpa lokasi.` })) return;
     try {
       await withLoading('Menghapus lokasi...', () => deleteLocation(name, state.items));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Lokasi dihapus.');
       viewSettings();
     } catch (err) { toast(friendlyError(err), 'error'); }
@@ -1143,7 +1177,7 @@ async function viewSettings() {
       toast('Mengimport data...');
       const json = JSON.parse(await file.text());
       const r = await withLoading(`Mengimport ${file.name}...`, () => importBackup(json));
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast(`Import berhasil: ${r.itemsImported} item, ${r.photosImported} foto.`);
       viewSettings();
     } catch (err) {
@@ -1160,7 +1194,7 @@ async function viewSettings() {
     })) return;
     try {
       await withLoading('Memuat data contoh...', () => loadSampleData());
-      await withLoading('Menyegarkan data...', () => refreshMeta());
+      await refreshMeta();
       toast('Data contoh dimuat!');
       viewSettings();
     } catch (e) { toast(friendlyError(e), 'error'); }
@@ -1180,18 +1214,18 @@ async function logout() {
   router();
 }
 
-window.addEventListener('hashchange', router);
+window.addEventListener('hashchange', () => router());
 
 watchAuth(async (user) => {
   const hadUser = !!state.user;
   state.user = user;
   setTopbar(!!user);
-  if (user) {
-    try {
-      await withLoading(hadUser ? 'Menyegarkan data...' : 'Memuat data kamu...', () => refreshMeta());
-    } catch (e) {
-      toast(friendlyError(e), 'error');
-    }
-  }
-  router();
+  // spinner ringan di halaman saja (bukan overlay) — hanya saat pertama login
+  if (user && !hadUser) renderViewLoading('Memuat data kamu...');
+  await refreshAndRender();
+});
+
+// tampilkan error dari login via redirect (mis. domain belum terdaftar)
+checkRedirectResult().then((errMsg) => {
+  if (errMsg) toast(errMsg, 'error');
 });
