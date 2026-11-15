@@ -1,14 +1,23 @@
 /**
- * Layer Firebase — Auth (Google), Firestore (data), Storage (foto).
+ * Layer Firebase — Auth (Google) + Firestore (data & foto).
  * SDK modular v10 dari CDN resmi (gstatic), tanpa build step.
+ *
+ * Kenapa foto di Firestore, bukan Cloud Storage?
+ * → Sejak 3 Feb 2026 Cloud Storage wajib plan Blaze (berbayar). Foto disimpan
+ *   sebagai base64 di dokumen Firestore (masih gratis di plan Spark).
  *
  * Struktur data di Firestore (per user, privat):
  *   users/{uid}/items/{itemId}       — barang: name, category, location, qty, unit,
  *                                      value, condition, purchaseDate, notes,
- *                                      photoURLs[], primaryPhotoIndex,
+ *                                      photoRefs[], primaryPhotoIndex,
  *                                      createdAt, updatedAt
+ *   users/{uid}/photos/{photoId}     — { itemId, data (dataURL base64), createdAt }
  *   users/{uid}/categories/{id}      — { name, createdAt }
  *   users/{uid}/locations/{id}       — { name, description, createdAt }
+ *
+ * Catatan: foto disimpan di dokumen terpisah (bukan di dokumen item) supaya
+ * list barang tetap ringan; foto diambil on-demand + di-cache di browser.
+ * Batas dokumen Firestore 1MB → foto dikompres client-side maks ~850KB base64.
  */
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {
@@ -16,18 +25,14 @@ import {
   onAuthStateChanged, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDocs, getDoc, addDoc, setDoc, updateDoc, deleteDoc,
+  getFirestore, collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc,
   writeBatch, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
-import {
-  getStorage, ref, uploadBytes, getDownloadURL, deleteObject,
-} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js';
 import { firebaseConfig } from './firebase-config.js';
 
 export const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 
 // Analytics opsional — gagal diam-diam kalau diblokir browser/adblock
 try {
@@ -59,8 +64,7 @@ const FIREBASE_ERRORS = {
   'auth/unauthorized-domain': 'Domain ini belum terdaftar di Firebase Console → Authentication → Authorized domains.',
   'auth/operation-not-allowed': 'Metode login Google belum diaktifkan di Firebase Console → Authentication → Sign-in method.',
   'auth/network-request-failed': 'Koneksi ke Firebase gagal. Cek internet lo.',
-  'permission-denied': 'Akses ditolak — cek Firestore/Storage Security Rules di Firebase Console.',
-  'storage/unauthorized': 'Akses Storage ditolak — cek Storage Security Rules di Firebase Console.',
+  'permission-denied': 'Akses ditolak — cek Firestore Security Rules di Firebase Console.',
 };
 
 export function friendlyError(err) {
@@ -107,7 +111,7 @@ function itemFromDoc(d) {
     condition: x.condition || 'baik',
     purchaseDate: x.purchaseDate || null,
     notes: x.notes || '',
-    photoURLs: Array.isArray(x.photoURLs) ? x.photoURLs : [],
+    photoRefs: Array.isArray(x.photoRefs) ? x.photoRefs : [],
     primaryPhotoIndex: Number(x.primaryPhotoIndex ?? 0),
     createdAt: ts(x.createdAt),
     updatedAt: ts(x.updatedAt),
@@ -133,7 +137,7 @@ export async function fetchAll() {
 export async function createItem(data) {
   const payload = {
     ...data,
-    photoURLs: [],
+    photoRefs: [],
     primaryPhotoIndex: 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -151,60 +155,45 @@ export async function updateItem(id, data) {
 
 export async function deleteItem(id) {
   const snap = await getDoc(doc(db, 'users', requireUser().uid, 'items', id));
-  await deletePhotosByUrl(snap.data()?.photoURLs);
+  const refs = snap.data()?.photoRefs || [];
+  if (refs.length) await deletePhotos(refs);
   await deleteDoc(doc(db, 'users', requireUser().uid, 'items', id));
 }
 
-// ---------------- storage: foto ----------------
-async function deletePhotosByUrl(urls) {
-  for (const url of urls || []) {
-    try { await deleteObject(ref(storage, url)); } catch { /* file sudah hilang */ }
+// ---------------- foto (base64 di Firestore) ----------------
+/** Simpan array dataURL sebagai dokumen foto → return array photoId */
+export async function createPhotos(itemId, dataUrls) {
+  const ids = [];
+  for (const data of dataUrls) {
+    const r = await addDoc(col('photos'), {
+      itemId,
+      data,
+      createdAt: serverTimestamp(),
+    });
+    ids.push(r.id);
   }
-}
-export const removePhotoFiles = deletePhotosByUrl;
-
-export async function uploadItemPhotos(itemId, files) {
-  const itemDoc = doc(db, 'users', requireUser().uid, 'items', itemId);
-  const urls = [];
-  for (const file of files) {
-    const ext = (file.name.match(/\.\w+$/) || ['.jpg'])[0].toLowerCase();
-    const r = ref(storage, `users/${requireUser().uid}/photos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
-    await uploadBytes(r, file, { contentType: file.type || 'image/jpeg' });
-    urls.push(await getDownloadURL(r));
-  }
-  return urls;
+  return ids;
 }
 
-export async function attachPhotos(item, newUrls, makePrimaryIdx = -1) {
-  const photoURLs = [...(item.photoURLs || []), ...newUrls];
-  let primaryPhotoIndex = item.primaryPhotoIndex ?? 0;
-  if (makePrimaryIdx >= 0) primaryPhotoIndex = makePrimaryIdx;
-  else if ((item.photoURLs || []).length === 0) primaryPhotoIndex = 0;
-  await updateDoc(doc(db, 'users', requireUser().uid, 'items', item.id), {
-    photoURLs,
-    primaryPhotoIndex,
-    updatedAt: serverTimestamp(),
-  });
-  return photoURLs;
+/** Ambil isi foto berdasarkan id → Map<photoId, dataURL> */
+export async function getPhotos(photoIds) {
+  const out = new Map();
+  await Promise.all((photoIds || []).map(async (id) => {
+    try {
+      const snap = await getDoc(doc(db, 'users', requireUser().uid, 'photos', id));
+      out.set(id, snap.data()?.data || null);
+    } catch {
+      out.set(id, null);
+    }
+  }));
+  return out;
 }
 
-export async function deleteItemPhoto(item, index) {
-  const url = item.photoURLs[index];
-  if (!url) return;
-  try { await deleteObject(ref(storage, url)); } catch { /* abaikan */ }
-  const photoURLs = item.photoURLs.filter((_, i) => i !== index);
-  let primaryPhotoIndex = item.primaryPhotoIndex;
-  if (index === item.primaryPhotoIndex) primaryPhotoIndex = 0;
-  else if (index < item.primaryPhotoIndex) primaryPhotoIndex -= 1;
-  await updateDoc(doc(db, 'users', requireUser().uid, 'items', item.id), {
-    photoURLs, primaryPhotoIndex, updatedAt: serverTimestamp(),
-  });
-}
-
-export async function setPrimaryPhoto(item, index) {
-  await updateDoc(doc(db, 'users', requireUser().uid, 'items', item.id), {
-    primaryPhotoIndex: index, updatedAt: serverTimestamp(),
-  });
+/** Hapus dokumen foto */
+export async function deletePhotos(photoIds) {
+  await Promise.all((photoIds || []).map(async (id) => {
+    try { await deleteDoc(doc(db, 'users', requireUser().uid, 'photos', id)); } catch { /* abaikan */ }
+  }));
 }
 
 // ---------------- categories & locations ----------------
@@ -261,24 +250,7 @@ export async function deleteLocation(name, items) {
   await batch.commit();
 }
 
-// ---------------- export / import ----------------
-export async function photoToBase64(url) {
-  const res = await fetch(url);
-  const blob = await res.blob();
-  return new Promise((resolve) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result).replace(/^data:[^,]+,/, ''));
-    fr.readAsDataURL(blob);
-  });
-}
-
-export function base64ToBlob(b64, type = 'image/jpeg') {
-  const bytes = atob(b64);
-  const arr = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-  return new Blob([arr], { type });
-}
-
+// ---------------- import backup ----------------
 export async function importBackup(json) {
   // kompatibel dengan format export v1 (id-based) & v2 (name-based)
   const catById = new Map((json.categories || []).map((c) => [c.id, c.name]));
@@ -306,18 +278,14 @@ export async function importBackup(json) {
     });
     itemsImported += 1;
 
-    const files = [];
-    for (const p of raw.photos || []) {
-      if (!p.data) continue;
-      const b64 = String(p.data).replace(/^data:[^,]+,/, '');
-      const name = p.filename || `foto-${files.length + 1}.jpg`;
-      files.push(new File([base64ToBlob(b64)], name, { type: 'image/jpeg' }));
-    }
-    if (files.length) {
-      const urls = await uploadItemPhotos(itemId, files);
+    const dataUrls = (raw.photos || [])
+      .filter((p) => p.data)
+      .map((p) => String(p.data).startsWith('data:') ? String(p.data) : `data:image/jpeg;base64,${p.data}`);
+    if (dataUrls.length) {
+      const ids = await createPhotos(itemId, dataUrls);
       const primaryIdx = Math.max(0, (raw.photos || []).findIndex((p) => p.is_primary));
-      await attachPhotos({ id: itemId, photoURLs: [], primaryPhotoIndex: 0 }, urls, primaryIdx);
-      photosImported += urls.length;
+      await updateItem(itemId, { photoRefs: ids, primaryPhotoIndex: primaryIdx });
+      photosImported += ids.length;
     }
   }
 
@@ -360,6 +328,15 @@ const SAMPLE = {
   ],
 };
 
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
 export async function loadSampleData() {
   for (const name of SAMPLE.categories) await addCategory(name);
   for (const [name, description] of SAMPLE.locations) await addLocation(name, description);
@@ -369,9 +346,9 @@ export async function loadSampleData() {
     if (photo) {
       try {
         const res = await fetch(`/assets/seed/${photo}`);
-        const file = new File([await res.blob()], photo, { type: 'image/jpeg' });
-        const urls = await uploadItemPhotos(itemId, [file]);
-        await attachPhotos({ id: itemId, photoURLs: [], primaryPhotoIndex: 0 }, urls);
+        const dataUrl = await blobToDataURL(await res.blob());
+        const ids = await createPhotos(itemId, [dataUrl]);
+        await updateItem(itemId, { photoRefs: ids, primaryPhotoIndex: 0 });
       } catch { /* foto contoh opsional */ }
     }
   }

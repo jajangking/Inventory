@@ -2,13 +2,16 @@
 
 Web app buat mencatat semua barang yang lo punya: **nama, qty, nilai (Rp), tempat nyimpan, kondisi, tanggal beli, foto, dan timestamp** — lengkap dengan dashboard total nilai inventaris, pencarian/filter, export CSV, dan backup JSON.
 
-Data tersimpan di **Firebase** (akun Google lo): login via **Google Sign-In**, data di **Firestore**, foto di **Firebase Storage**. Bisa dibuka dari HP maupun laptop.
+Data tersimpan di **Firebase** (akun Google lo): login via **Google Sign-In**, data & foto di **Firestore** — 100% gratis di plan Spark, **tanpa kartu kredit**. Bisa dibuka dari HP maupun laptop.
+
+> 💡 Kenapa foto di Firestore, bukan Cloud Storage? Sejak 3 Feb 2026, Cloud Storage wajib plan Blaze (berbayar). Foto disimpan sebagai base64 di dokumen Firestore (kompres otomatis ≤ ~850KB/foto) — gratis, privat per user, tanpa billing.
 
 ## ✨ Fitur
 
 - **Login Google** — privat per akun, tiap user cuma bisa akses datanya sendiri
 - **CRUD barang** — nama, deskripsi, kategori, lokasi, qty + satuan, nilai satuan (Rp), kondisi, tanggal beli, catatan
-- **Foto barang** — multi-foto (maks 10), otomatis dikompres, pilih foto utama, galeri + lightbox
+- **Foto barang** — multi-foto (maks 10), otomatis dikompres ke JPG, pilih foto utama, galeri + lightbox
+- **Loading spinner** — spinner global + spinner di tombol tiap aksi yang nunggu respon server (simpan, hapus, import, backup, login)
 - **Timestamp otomatis** — kapan barang dibuat & terakhir diubah
 - **Dashboard** — total jenis barang, total qty, total nilai (Rp), rekap nilai per lokasi & per kategori, barang terbaru & termahal
 - **Pencarian & filter** — cari nama/deskripsi/catatan, filter kategori & lokasi, sortir (terbaru, nama, nilai, qty)
@@ -30,7 +33,7 @@ npm start
 
 ## 🔥 Setup Firebase Console (WAJIB, sekali saja)
 
-App ini memakai Firebase project **`dimonitor-1c806`** (config ada di `public/firebase-config.js`). Supaya jalan, lakukan 3 langkah ini di [Firebase Console](https://console.firebase.google.com):
+App ini memakai Firebase project **`dimonitor-1c806`** (config ada di `public/firebase-config.js`). Supaya jalan, lakukan 2 langkah ini di [Firebase Console](https://console.firebase.google.com):
 
 ### 1. Aktifkan Google Sign-In
 **Authentication → Sign-in method → Google → Enable → Save**
@@ -42,7 +45,7 @@ App ini memakai Firebase project **`dimonitor-1c806`** (config ada di `public/fi
 
 > ⚠️ Tanpa ini, login akan gagal dengan error `auth/unauthorized-domain`.
 
-### 3. Buat Firestore + Storage Rules
+### 3. Buat Firestore + Security Rules
 **Firestore Database → Create database** (mode apa pun boleh), lalu paste rules ini di tab **Rules**:
 
 ```
@@ -56,20 +59,7 @@ service cloud.firestore {
 }
 ```
 
-**Storage → Get started**, lalu paste rules ini di tab **Rules**:
-
-```
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /users/{uid}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-  }
-}
-```
-
-Rules ini memastikan tiap user **hanya bisa baca/tulis data miliknya sendiri** (`users/{uid}/...`).
+Rules ini memastikan tiap user **hanya bisa baca/tulis data miliknya sendiri** (`users/{uid}/...`). **Cloud Storage tidak dipakai** — tidak perlu setup Storage/rules/billing sama sekali.
 
 ## 🗂 Struktur Data
 
@@ -77,17 +67,17 @@ Rules ini memastikan tiap user **hanya bisa baca/tulis data miliknya sendiri** (
 users/{uid}/
 ├── items/{itemId}        → name, category, location, qty, unit, value,
 │                           condition, purchaseDate, notes,
-│                           photoURLs[], primaryPhotoIndex,
+│                           photoRefs[], primaryPhotoIndex,
 │                           createdAt, updatedAt
+├── photos/{photoId}      → itemId, data (base64 dataURL), createdAt
 ├── categories/{id}       → name, createdAt
 └── locations/{id}        → name, description, createdAt
-
-Storage: users/{uid}/photos/{file}   → foto barang (sudah dikompres client-side)
 ```
 
 - `category` & `location` disimpan sebagai **nama string** (hapus/rename kategori otomatis menyesuaikan item lewat batch write)
 - `value` = nilai per satuan dalam Rupiah; **total nilai = qty × value**
 - Timestamp disimpan sebagai Firestore Timestamp (ditampilkan dalam waktu lokal)
+- **Foto** disimpan di dokumen terpisah (`photos/`) supaya list barang tetap ringan; diambil on-demand + di-cache di browser. Setiap foto otomatis dikompres (JPG, ≤ ~850KB) — batas ukuran dokumen Firestore 1MB
 
 ## 💾 Backup & Restore
 
@@ -104,7 +94,7 @@ Storage: users/{uid}/photos/{file}   → foto barang (sudah dikompres client-sid
 └── public/
     ├── index.html         # shell SPA
     ├── app.js             # semua view & logika (vanilla JS, ES module)
-    ├── firebase.js        # layer Firebase: Auth, Firestore, Storage
+    ├── firebase.js        # layer Firebase: Auth Google + Firestore (data & foto)
     ├── firebase-config.js # config Firebase project
     ├── style.css          # design system (light + dark auto)
     └── assets/            # ilustrasi & foto data contoh
