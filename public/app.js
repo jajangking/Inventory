@@ -297,7 +297,7 @@ function viewSignIn() {
         <span>Inventory</span>
       </div>
       <h2 style="margin:0 0 4px;font-size:20px">Catatan barang pribadi</h2>
-      <p class="auth-sub">Nilai, qty, lokasi penyimpanan, foto, dan timestamp — semua tersimpan aman di akun Google lo.</p>
+      <p class="auth-sub">Nilai, qty, lokasi penyimpanan, foto, dan timestamp — semua tersimpan aman di akun Google kamu.</p>
       <button class="btn btn-google" id="google-btn">${ICONS.google}<span>Masuk dengan Google</span></button>
       <div id="auth-msg" class="hint" style="margin-top:14px;text-align:center"></div>
     </div>
@@ -384,8 +384,8 @@ async function viewDashboard() {
   $('#app').innerHTML = `
     <div class="page-head">
       <div>
-        <h1 class="page-title">Halo, ${esc(state.user.displayName || state.user.email || 'bro')} 👋</h1>
-        <p class="page-sub">Ringkasan inventaris barang lo — ${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+        <h1 class="page-title">Halo, ${esc(state.user.displayName || state.user.email || 'teman')} 👋</h1>
+        <p class="page-sub">Ringkasan inventaris barang kamu — ${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
       </div>
       <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
     </div>
@@ -394,7 +394,7 @@ async function viewDashboard() {
     <div class="card card-pad empty">
       <img src="/assets/empty-state.png" alt="" onerror="this.style.display='none'" />
       <h3>Mulai dari mana dulu nih?</h3>
-      <p>Isi data contoh dulu buat lihat gimana app-nya jalan, atau langsung tambah barang pertama lo.</p>
+      <p>Isi data contoh dulu buat lihat gimana app-nya jalan, atau langsung tambah barang pertama kamu.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
         <button class="btn btn-outline" id="seed-btn">✨ Muat Data Contoh</button>
         <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
@@ -453,7 +453,7 @@ async function viewDashboard() {
   $('#seed-btn')?.addEventListener('click', async () => {
     if (!await confirmModal({
       title: 'Muat data contoh?', danger: false, confirmText: 'Muat',
-      message: '8 item contoh + kategori & lokasi akan ditambahkan ke akun lo. Bisa dihapus kapan aja.',
+      message: '8 item contoh + kategori & lokasi akan ditambahkan ke akun kamu. Bisa dihapus kapan aja.',
     })) return;
     try {
       await withLoading('Memuat data contoh...', () => loadSampleData());
@@ -527,7 +527,7 @@ async function viewItems() {
     <div class="page-head">
       <div>
         <h1 class="page-title">Barang</h1>
-        <p class="page-sub">${total} item${f.q || f.category || f.location ? ` (dari ${state.items.length} total)` : ' tercatat di inventaris lo'}</p>
+        <p class="page-sub">${total} item${f.q || f.category || f.location ? ` (dari ${state.items.length} total)` : ' tercatat di inventaris kamu'}</p>
       </div>
       <a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>
     </div>
@@ -557,7 +557,7 @@ async function viewItems() {
       <div class="empty">
         <img src="/assets/empty-state.png" alt="" onerror="this.style.display='none'" />
         <h3>${f.q || f.category || f.location ? 'Tidak ada yang cocok' : 'Belum ada barang'}</h3>
-        <p>${f.q || f.category || f.location ? 'Coba ubah kata kunci atau filternya.' : 'Mulai catat barang pertama lo: nama, qty, nilai, lokasi, dan fotonya.'}</p>
+        <p>${f.q || f.category || f.location ? 'Coba ubah kata kunci atau filternya.' : 'Mulai catat barang pertama kamu: nama, qty, nilai, lokasi, dan fotonya.'}</p>
         ${f.q || f.category || f.location
           ? '<button class="btn btn-outline" id="clear-filter">Reset filter</button>'
           : '<a class="btn btn-primary" href="#/items/new">+ Tambah Barang</a>'}
@@ -705,7 +705,7 @@ async function viewItemForm(id) {
       <div>
         <a href="${editing ? `#/items/${id}` : '#/items'}" class="page-sub">← Batal</a>
         <h1 class="page-title" style="margin-top:6px">${editing ? 'Edit Barang' : 'Tambah Barang'}</h1>
-        <p class="page-sub">${editing ? 'Perbarui data barang lo.' : 'Catat barang baru: identitas, qty, nilai, lokasi, dan foto.'}</p>
+        <p class="page-sub">${editing ? 'Perbarui data barang kamu.' : 'Catat barang baru: identitas, qty, nilai, lokasi, dan foto.'}</p>
       </div>
     </div>
 
@@ -991,7 +991,7 @@ async function viewSettings() {
       <div class="card card-pad">
         <h3 class="card-title">Akun 🔐</h3>
         <p class="page-sub" style="margin-top:0">Login sebagai <b>${esc(state.user.displayName || state.user.email || '')}</b>${state.user.email ? ` · ${esc(state.user.email)}` : ''}</p>
-        <p class="page-sub">Data & foto tersimpan di project Firebase <b>dimonitor-1c806</b> dan hanya bisa diakses akun Google lo.</p>
+        <p class="page-sub">Data & foto tersimpan di project Firebase <b>dimonitor-1c806</b> dan hanya bisa diakses akun Google kamu.</p>
         <hr class="divider" />
         <button class="btn btn-danger" id="logout-settings">Keluar dari akun</button>
       </div>
@@ -1156,7 +1156,7 @@ async function viewSettings() {
   $('#seed-btn').addEventListener('click', async () => {
     if (!await confirmModal({
       title: 'Muat data contoh?', danger: false, confirmText: 'Muat',
-      message: '8 item contoh + kategori & lokasi akan ditambahkan ke akun lo. Bisa dihapus kapan aja.',
+      message: '8 item contoh + kategori & lokasi akan ditambahkan ke akun kamu. Bisa dihapus kapan aja.',
     })) return;
     try {
       await withLoading('Memuat data contoh...', () => loadSampleData());
@@ -1188,7 +1188,7 @@ watchAuth(async (user) => {
   setTopbar(!!user);
   if (user) {
     try {
-      await withLoading(hadUser ? 'Menyegarkan data...' : 'Memuat data lo...', () => refreshMeta());
+      await withLoading(hadUser ? 'Menyegarkan data...' : 'Memuat data kamu...', () => refreshMeta());
     } catch (e) {
       toast(friendlyError(e), 'error');
     }

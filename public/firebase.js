@@ -63,7 +63,7 @@ const FIREBASE_ERRORS = {
   'auth/popup-closed-by-user': 'Login dibatalkan.',
   'auth/unauthorized-domain': 'Domain ini belum terdaftar di Firebase Console → Authentication → Authorized domains.',
   'auth/operation-not-allowed': 'Metode login Google belum diaktifkan di Firebase Console → Authentication → Sign-in method.',
-  'auth/network-request-failed': 'Koneksi ke Firebase gagal. Cek internet lo.',
+  'auth/network-request-failed': 'Koneksi ke Firebase gagal. Cek internet kamu.',
   'permission-denied': 'Akses ditolak — cek Firestore Security Rules di Firebase Console.',
 };
 
